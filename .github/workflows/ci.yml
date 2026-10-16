@@ -23,16 +23,17 @@ jobs:
         with: { toolchain: stable, components: clippy }
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # TEMPORARY: does the Windows stack overflow also happen in a release build?
+      # (pwsh: the Git Bash perl cannot configure vendored OpenSSL)
       - name: diagnose stack overflow (temporary)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         continue-on-error: true
         run: |
-          set +e +o pipefail
-          cargo test --release -p regino-vault --test vault > d.log 2>&1
-          echo "rc=$?" >> d.log
-          msg=$(grep -vE "ERROR CORE|Compiling|Downloaded" d.log | tail -30 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-          echo "::warning title=release::$msg"
+          cargo test --release -p regino-vault --test vault *> d.log
+          $rc = $LASTEXITCODE
+          $lines = Get-Content d.log | Where-Object { $_ -match 'test result|overflow|STATUS_|panicked|error' -and $_ -notmatch 'ERROR CORE' } | Select-Object -Last 15
+          $msg = (($lines + "rc=$rc") -join '%0A')
+          Write-Output "::warning title=release::$msg"
       - name: cargo test --workspace (including Wycheproof vectors)
         shell: bash
         run: |
