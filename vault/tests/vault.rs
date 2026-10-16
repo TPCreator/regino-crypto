@@ -126,10 +126,14 @@ fn transaction_and_foreign_keys() {
     );
 }
 
+fn open_tmp() -> (tempfile::TempDir, Vault) {
+    let (d, path) = tmp();
+    (d, Vault::open(&path, &Key::generate().unwrap()).unwrap())
+}
+
 #[test]
-fn invalid_values_and_keys() {
-    let (_d, path) = tmp();
-    let v = Vault::open(&path, &Key::generate().unwrap()).unwrap();
+fn array_and_object_params_are_rejected() {
+    let (_d, v) = open_tmp();
     assert!(matches!(
         v.run("SELECT ?", &[json!([1, 2])]),
         Err(Error::BadValue(_))
@@ -138,10 +142,19 @@ fn invalid_values_and_keys() {
         v.run("SELECT ?", &[json!({"a": 1})]),
         Err(Error::BadValue(_))
     ));
+}
+
+#[test]
+fn blob_results_are_rejected() {
+    let (_d, v) = open_tmp();
     assert!(matches!(
         v.all("SELECT x'00' AS b", &[]),
         Err(Error::BadValue(_))
     ));
+}
+
+#[test]
+fn invalid_hex_keys_are_rejected() {
     assert!(matches!(Key::from_hex("abc"), Err(Error::BadKey)));
     assert!(matches!(
         Key::from_hex(&"zz".repeat(32)),
@@ -152,6 +165,11 @@ fn invalid_values_and_keys() {
         Key::from_hex(&k.to_hex()).unwrap().to_hex().as_str(),
         k.to_hex().as_str()
     );
+}
+
+#[test]
+fn sql_syntax_error_is_an_error() {
+    let (_d, v) = open_tmp();
     assert!(matches!(v.exec("SELEC error"), Err(Error::Sql(_))));
 }
 
