@@ -42,7 +42,7 @@ side channels on the user's own device beyond what the libraries provide.
 
 | Function | Construction | Parameters / format |
 |---|---|---|
-| Local DB (Windows) | SQLCipher 4 via `rusqlite` (`bundled-sqlcipher-vendored-openssl`), raw key `PRAGMA key = "x'…'"` | 256-bit random key from `getrandom`, stored in Windows Credential Manager (DPAPI) via `keyring-core`; `cipher_memory_security = ON`; WAL; `rekey` re-encrypts the file |
+| Local DB (Windows) | SQLCipher 4 via `rusqlite` (`bundled-sqlcipher-vendored-openssl`), raw key `PRAGMA key = "x'…'"` | 256-bit random key from `getrandom`, stored in Windows Credential Manager (DPAPI) via `keyring-core`; `cipher_memory_security` left OFF (see question 11); WAL; `rekey` re-encrypts the file |
 | Backups | HKDF-SHA256 → AES-256-GCM (WebCrypto) | IKM = recovery secret (16 or 32 B); salt 16 B random per backup; info `"<app> backup v1"` (32 B secret, legacy) or `"<app> backup v1 k128"` (16 B); IV 96 b random; AAD = `"<app>-backup|<version>|<createdAt>"`; JSON `{format, version, createdAt, salt, nonce, ciphertext}` (base64) |
 | Recovery phrase | BIP-39-like on a fixed Slovak 2048-word list | 128-bit secret + 4-bit checksum = 12 words (default since 0.2.0), or 256 + 8 = 24 words; checksum = leading bits of SHA-256; first 4 letters identify a word, diacritics optional; QR text `RGR1:` + base32(secret ‖ SHA-256[0..2]) |
 | Recovery key (to wrap a master key) | HKDF-SHA256, no salt | info `"<app> recovery-key v1 k128|k256"`; identical in Rust (`recovery_key`) and TS (`recoveryKey`), guarded by fixed cross-language vectors |
@@ -66,6 +66,10 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
 8. Backup format: legacy info string for 32-byte secrets (kept so backups from version 0.1.0 open) – any weakness from mixing both lengths?
 9. `backups.rs`: name validation against path traversal, temp file + `fsync` + rename, pruning to the newest N.
 10. Integrity of the public tool `tools/open-backup.html` (CI checks that it matches the sources).
+11. `cipher_memory_security` is OFF (the SQLCipher default). With it ON, Windows refused to lock more
+    memory (`VirtualLock` error 1453, working-set quota) and the process crashed with a stack overflow.
+    Without it, freed SQLite memory (e.g. decrypted page cache) is not wiped or locked against paging;
+    key buffers are still wiped by SQLCipher and `zeroize`. Is this acceptable, or is there a safer setup?
 
 ## 5. Existing assurance
 

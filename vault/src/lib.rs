@@ -75,10 +75,6 @@ pub struct Vault {
 impl Vault {
     /// Opens (or creates) the encrypted file. A wrong key returns `Error::WrongKey` and overwrites nothing.
     pub fn open(path: &Path, key: &Key) -> Result<Vault, Error> {
-        // Open one at a time: concurrent keying (especially with a wrong key) overflowed the stack
-        // in SQLCipher on Windows. Opening is rare, so this costs nothing in practice.
-        static OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = OPEN.lock().unwrap_or_else(|e| e.into_inner());
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -96,9 +92,10 @@ impl Vault {
         {
             return Err(Error::WrongKey);
         }
-        conn.execute_batch(
-            "PRAGMA cipher_memory_security = ON; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
-        )?;
+        // cipher_memory_security stays OFF (the SQLCipher default): on Windows, locking every SQLite
+        // allocation exhausts the working-set quota (VirtualLock error 1453) and the process then dies
+        // with a stack overflow. Key buffers are wiped by SQLCipher and by `zeroize` regardless.
+        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
         Ok(Vault { conn })
     }
 

@@ -22,22 +22,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # stable
         with: { toolchain: stable, components: clippy }
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      # TEMPORARY: which condition triggers the Windows stack overflow? (release build)
-      # (pwsh: the Git Bash perl cannot configure vendored OpenSSL)
-      - name: diagnose stack overflow (temporary)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          function Report($title) {
-            $rc = $LASTEXITCODE
-            $lines = Get-Content d.log | Where-Object { $_ -match 'test result|overflow|STATUS_' } | Select-Object -Last 5
-            Write-Output "::warning title=$title::$((($lines + "rc=$rc") -join '%0A'))"
-          }
-          cargo test --release -p regino-vault --test vault -- --test-threads=1 *> d.log; Report "single-thread"
-          (Get-Content vault/src/lib.rs) -replace 'cipher_memory_security = ON', 'cipher_memory_security = OFF' | Set-Content vault/src/lib.rs
-          cargo test --release -p regino-vault --test vault *> d.log; Report "memsec-off"
-          git checkout vault/src/lib.rs
       - name: cargo test --workspace (including Wycheproof vectors)
         shell: bash
         run: |
