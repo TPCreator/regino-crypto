@@ -1,0 +1,3 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`word list > the list never changes (fingerprint) 1`] = `"c3a621ca784ff522c2ad479b64753c1f408d994198dfdba2fa13083e30382e2c"`;

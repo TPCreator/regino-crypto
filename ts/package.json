@@ -1,0 +1,24 @@
+{
+  "name": "@regino/crypto",
+  "version": "0.3.0",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "vitest run --coverage",
+    "check": "tsc --noEmit",
+    "build:tool": "node tools/build.mjs"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^5.0.4",
+    "esbuild": "^0.28.2",
+    "jsqr": "^1.4.0",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.4"
+  },
+  "dependencies": {
+    "qrcode-generator": "^2.0.4"
+  }
+}

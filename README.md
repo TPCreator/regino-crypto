@@ -1,0 +1,49 @@
+# regino-crypto
+
+Encryption core for apps that protect sensitive personal data. Published so anyone can verify how the data is protected.
+
+*Slovensky: šifrovacie jadro pre aplikácie s citlivými osobnými údajmi, zverejnené, aby si ktokoľvek mohol overiť, ako sú údaje chránené.*
+
+| Part | What it does |
+|---|---|
+| `vault/` (Rust, `regino-vault`) | Encrypted local database – SQLite + **SQLCipher (AES-256)**, key in the OS keystore (Windows Credential Manager), safe backup writes |
+| `keys/` (Rust, `regino-keys`) | **Argon2id** (key from password), **XChaCha20-Poly1305** (key wrapping and data sealing with authenticated context), **Shamir 2-of-3** (key splitting with integrity check), **recovery-code key** (HKDF-SHA256, identical to the TypeScript side) |
+| `ts/` (TypeScript, `@regino/crypto`) | Recovery code – **12 Slovak words** by default (128 bits), optionally **24 words** (256 bits), with checksum; **printable recovery sheet** with QR code (data only, no address, generated offline), encrypted backups (**HKDF-SHA256 → AES-256-GCM**), PIN for switching users |
+
+## How it fits together (example)
+
+```
+password ──Argon2id──► password key ──┐
+recovery code (12/24 words) ──────────┼─ wraps ─► master key ─ wraps ─► client key ─ seals ─► client records
+2 of 3 shares (paper / person / notary) ┘
+```
+- Deleting a client = discarding the client's wrapped key → its records become unreadable, in all backups too.
+- Changing the password = re-wrapping the master key; data is not re-encrypted.
+- No single share of the "2 of 3" opens anything on its own – not even the one held by the operator.
+
+## How to verify that an app really uses this core
+
+1. **Open your backup independently:** download [`tools/open-backup.html`](tools/open-backup.html) (a single file that runs offline in the browser), select a backup from the app and enter your 12 or 24 words (or a photo of the QR code from the recovery sheet). If it opens, the app encrypts with this public code. The file is built from the sources in `ts/` and an automated check ensures it does not differ from them.
+2. **Version in the app:** the "About" screen shows the core version and commit, e.g. "regino-crypto 0.3.0 (1a2b3c4)" – compare it with the [releases](https://github.com/TPCreator/regino-crypto/releases).
+3. **Software bill of materials (SBOM):** every release of the core and of the app comes with a machine-readable list of all libraries (CycloneDX) and SHA-256 checksums.
+
+## Audit
+Material for an independent security review (scope, threat model, parameters, questions): [AUDIT.md](AUDIT.md).
+
+## Rules
+- Only well-reviewed libraries (RustCrypto, SQLCipher, WebCrypto) – no home-grown cryptography.
+- Format version in the header of every wrapped key and backup.
+- Tests on every change (`cargo test --workspace`, `npx vitest run --coverage` in `ts/`, 100 % coverage).
+- Independent security audit before production use.
+
+## Security
+Please report vulnerabilities privately – see [SECURITY.md](SECURITY.md).
+
+## License
+**MIT OR Apache-2.0**, at your option. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+
+## Changelog
+
+- **0.3.0 (2026-10-16):** the app name for backups is **required** (`encryptBackup(secret, payload, createdAt, app)`, `decryptBackup(secret, file, app)`) – the default value was removed; the `<app>-backup` format and the keys are unchanged, old backups open with the same app name. Audit preparation: `AUDIT.md`, Wycheproof test vectors, cargo-deny and npm audit in CI.
+- **0.2.0 (2026-10-16):** recovery code of 12 words (default) or 24 words; recovery sheet with QR code (`recoverySheetHtml`, `recoveryQrSvg`); `wordsToSecret` also accepts the text from the QR code; `recoveryKey` / `regino_keys::recovery::recovery_key`; the `open-backup.html` tool accepts 12 or 24 words and a photo of the QR code. **Backups and 24-word codes from 0.1.0 remain valid** (tested with a fixed backup from 0.1.0).
+- **0.1.0 (2026-10-16):** first release.

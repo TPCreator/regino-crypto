@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob:; connect-src 'none'">
+<title>Open backup – regino-crypto</title>
+<style>
+  body { font: 16px/1.55 system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #222; background: #faf8f3; }
+  h1 { font: normal 26px Georgia, serif; }
+  label { display: block; font-weight: 600; margin: 18px 0 6px; }
+  textarea, input { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; border: 1px solid #ccc; border-radius: 8px; background: #fff; }
+  textarea { height: 110px; }
+  button { margin-top: 18px; padding: 10px 22px; font: inherit; font-weight: 600; color: #fff; background: #3f5d45; border: 0; border-radius: 8px; cursor: pointer; }
+  #out { margin-top: 18px; padding: 12px 14px; border-radius: 8px; }
+  #out.ok { background: #e3ebdf; } #out.err { background: #f6e1da; color: #8a2c1d; }
+  small { color: #666; }
+  .sk { margin-top: -8px; color: #555; font-style: italic; }
+</style>
+</head>
+<body>
+<h1>Open a backup independently</h1>
+<p lang="sk" class="sk">Slovensky: Otvorte zálohu svojím obnovovacím kódom (12 alebo 24 slov alebo QR kód). Všetko prebieha len vo vašom prehliadači.</p>
+<p>This file opens an encrypted backup from an app that uses the regino-crypto core, using your recovery code (12 or 24 words, or the QR code from the recovery sheet). It runs only in your browser – <b>nothing is sent to the internet</b> (you can open it offline too).</p>
+<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: __VERSION__.</small></p>
+<label for="file">Backup file</label>
+<input id="file" type="file" accept=".json,application/json,*/*">
+<label for="words">Recovery code – 12 or 24 words</label>
+<textarea id="words" autocomplete="off" spellcheck="false" placeholder="the first 4 letters of each word are enough; accents are optional"></textarea>
+<label for="qr">…or a photo of the QR code from the recovery sheet</label>
+<input id="qr" type="file" accept="image/*">
+<small id="qrmsg" aria-live="polite">The photo is processed only here in your browser and is not stored anywhere.</small>
+<button id="go">Open</button>
+<div id="out" aria-live="polite"></div>
+<p><small>QR code reading: jsQR (Apache-2.0, github.com/cozmo/jsQR).</small></p>
+<script>__SCRIPT__</script>
+</body>
+</html>

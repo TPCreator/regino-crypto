@@ -1,0 +1,44 @@
+# Release: on GitHub Releases › Draft a new release › tag v0.1.0 › Publish
+# (or git tag v0.1.0 && git push --tags).
+# Attached to the release: the backup-opening tool, software bills of materials (SBOM, CycloneDX) and checksums.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  release:
+    types: [published]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # stable
+        with: { toolchain: stable }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22 }
+      - run: cargo test --workspace
+      - run: npm install --no-audit --no-fund && npx vitest run && npm run build:tool
+        working-directory: ts
+      - name: Tool in the repository matches the sources
+        run: git diff --exit-code tools/open-backup.html
+      - name: Software bills of materials (SBOM)
+        run: |
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --format json
+          mkdir dist
+          cp vault/regino-vault.cdx.json keys/regino-keys.cdx.json dist/
+          (cd ts && npx --yes @cyclonedx/cyclonedx-npm@4 --output-file ../dist/regino-crypto-ts.cdx.json)
+          cp tools/open-backup.html dist/
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+      - name: GitHub release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          tag="${{ github.event.release.tag_name || github.ref_name }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* --title "regino-crypto $tag" \
+              --notes "Commit: $GITHUB_SHA. Assets: tool for opening a backup independently, software bills of materials (CycloneDX) and SHA-256 checksums."
+          fi

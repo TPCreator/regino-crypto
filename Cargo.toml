@@ -1,0 +1,10 @@
+[workspace]
+members = ["vault", "keys"]
+resolver = "2"
+
+# Unoptimized SQLCipher (C) has stack frames that are too large on Windows – tests failed
+# with "stack overflow". Optimize it in debug builds too (apps: do the same in their Cargo.toml).
+[profile.dev.package.libsqlite3-sys]
+opt-level = 2
+[profile.dev.package.openssl-sys]
+opt-level = 2
