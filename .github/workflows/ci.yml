@@ -22,20 +22,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # stable
         with: { toolchain: stable, components: clippy }
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      # TEMPORARY: is the Windows stack overflow unbounded recursion or just large debug frames?
+      # TEMPORARY: does the Windows stack overflow also happen in a release build?
       - name: diagnose stack overflow (temporary)
         if: runner.os == 'Windows'
         shell: bash
         continue-on-error: true
         run: |
-          for mode in "debug-16MB" "release-2MB"; do
-            if [ "$mode" = debug-16MB ]; then
-              RUST_MIN_STACK=16777216 cargo test -p regino-vault --test vault blob_results 2>&1 | tail -3 > d.log; rc=$?
-            else
-              cargo test --release -p regino-vault --test vault blob_results 2>&1 | tail -3 > d.log; rc=$?
-            fi
-            echo "::warning title=$mode::$(grep -E 'test result|overflow|STATUS' d.log | tr '\n' ' ')"
-          done
+          set +e +o pipefail
+          cargo test --release -p regino-vault --test vault > d.log 2>&1
+          echo "rc=$?" >> d.log
+          msg=$(grep -vE "ERROR CORE|Compiling|Downloaded" d.log | tail -30 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::warning title=release::$msg"
       - name: cargo test --workspace (including Wycheproof vectors)
         shell: bash
         run: |
