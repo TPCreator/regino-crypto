@@ -26,9 +26,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          if ! cargo test --workspace 2>&1 | tee test.log; then
-            # also surface errors as public annotations (run logs cannot be downloaded without signing in)
-            grep -E "panicked|error|FAILED|failed|thread '" test.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done
+          if ! cargo test --workspace --no-fail-fast 2>&1 | tee test.log; then
+            # surface the cause as one public annotation (run logs cannot be downloaded without signing in;
+            # GitHub keeps only 10 annotations per step, so join the lines)
+            msg=$(grep -vE "ERROR CORE|Compiling|^test .* \.\.\. ok$|test result: ok" test.log \
+              | grep -E "Running|panicked|FAILED|error|overflow|STATUS_|exit code|signal|^---- " | tail -40 \
+              | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=cargo test failed::$msg"
             exit 1
           fi
 
