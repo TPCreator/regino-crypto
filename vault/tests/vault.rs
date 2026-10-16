@@ -181,3 +181,29 @@ fn json_functions_for_change_log() {
     assert_eq!(rows[0]["o"], serde_json::json!("{\"a\":1,\"b\":\"x\"}"));
     assert_eq!(rows[0]["e"], serde_json::json!("m1"));
 }
+
+#[test]
+fn concurrent_open_with_right_and_wrong_key() {
+    let (_d, path) = tmp();
+    let key = Key::generate().unwrap();
+    Vault::open(&path, &key).unwrap().exec("CREATE TABLE t (x INTEGER)").unwrap();
+    let hex = key.to_hex().as_str().to_string();
+    let threads: Vec<_> = (0..8)
+        .map(|i| {
+            let (path, hex) = (path.clone(), hex.clone());
+            std::thread::spawn(move || {
+                for _ in 0..5 {
+                    if i % 2 == 0 {
+                        assert!(Vault::open(&path, &Key::from_hex(&hex).unwrap()).is_ok());
+                    } else {
+                        let wrong = Key::generate().unwrap();
+                        assert!(matches!(Vault::open(&path, &wrong), Err(Error::WrongKey)));
+                    }
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+}
