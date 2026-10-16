@@ -44,6 +44,7 @@ Please report vulnerabilities privately – see [SECURITY.md](SECURITY.md).
 
 ## Changelog
 
+- **0.4.0 (2026-10-16):** verification of signed tokens (`signed.ts`): Ed25519 via `@noble/ed25519` (strict RFC 8032), key certificates from built-in root keys, key lists, Wycheproof Ed25519 vectors. Vault: `cipher_memory_security` left off (crashed on Windows, see `AUDIT.md`).
 - **0.3.0 (2026-10-16):** the app name for backups is **required** (`encryptBackup(secret, payload, createdAt, app)`, `decryptBackup(secret, file, app)`) – the default value was removed; the `<app>-backup` format and the keys are unchanged, old backups open with the same app name. Audit preparation: `AUDIT.md`, Wycheproof test vectors, cargo-deny and npm audit in CI.
 - **0.2.0 (2026-10-16):** recovery code of 12 words (default) or 24 words; recovery sheet with QR code (`recoverySheetHtml`, `recoveryQrSvg`); `wordsToSecret` also accepts the text from the QR code; `recoveryKey` / `regino_keys::recovery::recovery_key`; the `open-backup.html` tool accepts 12 or 24 words and a photo of the QR code. **Backups and 24-word codes from 0.1.0 remain valid** (tested with a fixed backup from 0.1.0).
 - **0.1.0 (2026-10-16):** first release.

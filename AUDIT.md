@@ -13,10 +13,10 @@ can verify our claims.
 |---|---|---|---|
 | `keys/` (`regino-keys`) | Rust | `kdf.rs`, `wrap.rs`, `recovery.rs`, `shamir.rs`, `lib.rs` | password KDF, key wrapping and sealing, recovery-code key, 2-of-3 key splitting |
 | `vault/` (`regino-vault`) | Rust | `lib.rs`, `keystore.rs`, `backups.rs` | encrypted local SQLite (SQLCipher), DB key in the OS keystore, backup file writing |
-| `ts/` (`@regino/crypto`) | TypeScript (WebCrypto) | `backup.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts` | encrypted backups, recovery phrase (12/24 Slovak words, QR), user-switch PIN, printable recovery sheet |
+| `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`) | `backup.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts` | encrypted backups, recovery phrase (12/24 Slovak words, QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates |
 | `tools/open-backup.html` | built from `ts/tools/` | | public offline tool that opens any backup with the recovery phrase |
 
-Size: about 1 100 lines of non-test code. The commit to review is fixed when the engagement starts
+Size: about 1 250 lines of non-test code. The commit to review is fixed when the engagement starts
 (apps pin the core to a commit; see `Cargo.toml` / `package.json` of the apps).
 
 **Out of scope:** the apps that use the core, the Android storage plugin
@@ -49,6 +49,7 @@ side channels on the user's own device beyond what the libraries provide.
 | Key wrapping / sealing | XChaCha20-Poly1305 (RustCrypto `chacha20poly1305`) | nonce 192 b random; blob `magic(4) ‖ nonce(24) ‖ ct ‖ tag(16)`, magic `RGW1` (wrap) / `RGS1` (seal); AAD = `magic ‖ context`, context not stored (e.g. `<app>/client/<id>`) |
 | Password KDF | Argon2id v1.3 (RustCrypto `argon2`) | default m = 64 MiB, t = 3, p = 1; minimum enforced m = 19 MiB, t = 2; salt 16 B; parameters stored by the caller next to the wrapped key |
 | Key splitting | Shamir over GF(256) (`blahaj` 0.6) | share `RGK1 ‖ threshold ‖ fingerprint(8) ‖ share`; fingerprint = SHA-256(`"regino-keys/shamir/v1"` ‖ key)[0..8] to reject foreign or damaged shares |
+| Signed tokens (licences) | Ed25519 verify only (`@noble/ed25519` 3.2.0, strict RFC 8032, `zip215: false`) | token `PREFIX1.<payload b64url>.<sig b64url>`, signature over the JSON bytes; apps ship root public keys, every other key needs a root-signed certificate (`RG1.…`, `typ: cert`, `nbf`/`exp`); a fetched key list cannot add keys; caller checks prefix, `product`, `use`; revoked kids dropped |
 | User-switch PIN | PBKDF2-SHA256 (WebCrypto) | 4–8 digits, 200 000 iterations, salt 16 B; stored `pbkdf2$iter$salt$hash`; offline brute force is trivial by design (UI barrier only) |
 
 Randomness: OS CSPRNG (`getrandom`, `crypto.getRandomValues`). Rust secrets use `zeroize`;
@@ -65,8 +66,9 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
 7. SQLCipher usage: raw-key `PRAGMA` built as a zeroized string, key check via `sqlite_master`, WAL files, `rekey` safety.
 8. Backup format: legacy info string for 32-byte secrets (kept so backups from version 0.1.0 open) – any weakness from mixing both lengths?
 9. `backups.rs`: name validation against path traversal, temp file + `fsync` + rename, pruning to the newest N.
-10. Integrity of the public tool `tools/open-backup.html` (CI checks that it matches the sources).
-11. `cipher_memory_security` is OFF (the SQLCipher default). With it ON, Windows refused to lock more
+10. `signed.ts`: certificate checks (time window, kid binding, revocation) and whether the unsigned token prefix or the `kid` lookup before verification opens any confusion between keys or products.
+11. Integrity of the public tool `tools/open-backup.html` (CI checks that it matches the sources).
+12. `cipher_memory_security` is OFF (the SQLCipher default). With it ON, Windows refused to lock more
     memory (`VirtualLock` error 1453, working-set quota) and the process crashed with a stack overflow.
     Without it, freed SQLite memory (e.g. decrypted page cache) is not wiped or locked against paging;
     key buffers are still wiped by SQLCipher and `zeroize`. Is this acceptable, or is there a safer setup?
@@ -75,7 +77,7 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
 
 - Tests on every change: `cargo test --workspace`, `cd ts && npx vitest run --coverage` (100 % coverage enforced).
 - Fixed cross-language vectors (Rust ↔ TS) for the recovery key; snapshot of the word list.
-- **Wycheproof** vectors (`testvectors/wycheproof/`): XChaCha20-Poly1305, AES-256-GCM (96-bit IV), HKDF-SHA256 – valid inputs accepted, invalid rejected.
+- **Wycheproof** vectors (`testvectors/wycheproof/`): XChaCha20-Poly1305, AES-256-GCM (96-bit IV), HKDF-SHA256, Ed25519 – valid inputs accepted, invalid rejected.
 - **cargo-deny** (`deny.toml`): RustSec advisories, yanked crates, license allow-list, crates.io only. **npm audit** for `ts/`.
 - CI actions pinned to commit hashes, read-only token. Releases attach CycloneDX SBOMs and SHA-256 checksums.
 
