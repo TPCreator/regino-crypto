@@ -66,6 +66,16 @@ jobs:
       - name: Vulnerable packages (npm audit)
         run: npm audit --audit-level=moderate
       - run: npx tsc --noEmit
-      - run: npx vitest run --coverage
+      - name: npx vitest run --coverage
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! npx vitest run --coverage 2>&1 | tee test.log; then
+            # surface the cause as one public annotation (run logs cannot be downloaded without signing in)
+            msg=$(grep -E "FAIL|×|Error|expected|ERROR|Timed out|threshold" test.log | tail -40 \
+              | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=vitest failed::$msg"
+            exit 1
+          fi
       - name: Tool in the repository matches the sources
         run: npm run build:tool && git diff --exit-code ../tools/open-backup.html
