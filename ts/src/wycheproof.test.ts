@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import aesGcm from '../../testvectors/wycheproof/aes_gcm_test.json';
 import hkdf from '../../testvectors/wycheproof/hkdf_sha256_test.json';
+import ecdh from '../../testvectors/wycheproof/ecdh_secp256r1_ecpoint_test.json';
 
 /**
  * Wycheproof test vectors (testvectors/wycheproof): WebCrypto, which backups are built on
@@ -17,7 +18,32 @@ interface Test {
 }
 const all = (doc: { testGroups: { tests: Test[] }[] }) => doc.testGroups.flatMap((g) => g.tests);
 
+// PKCS#8 for a P-256 private scalar (no public key inside – WebCrypto computes it).
+const pkcs8P256 = (d: Uint8Array) => {
+  const prefix = hex('308141020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420');
+  const out = new Uint8Array(prefix.length + 32);
+  out.set(prefix);
+  const k = d.subarray(Math.max(0, d.length - 32)); // strip a leading 00, left-pad short scalars
+  out.set(k, out.length - k.length);
+  return out;
+};
+
 describe('Wycheproof', () => {
+  it('ECDH P-256, raw points (sync.ts, inbox.ts) – invalid-curve and wrong-curve points rejected', async () => {
+    const tests = all(ecdh as never);
+    expect(tests).toHaveLength(355);
+    const P256 = { name: 'ECDH', namedCurve: 'P-256' } as const;
+    for (const t of tests) {
+      const priv = await crypto.subtle.importKey('pkcs8', pkcs8P256(hex(t.private as string)), P256, false, ['deriveBits']);
+      const shared = await crypto.subtle
+        .importKey('raw', hex(t.public as string), P256, false, [])
+        .then((pub) => crypto.subtle.deriveBits({ name: 'ECDH', public: pub }, priv, 256))
+        .then(toHex, () => null);
+      if (t.result === 'valid') expect(shared, `tcId ${t.tcId}`).toBe(t.shared);
+      else if (t.result === 'invalid') expect(shared, `invalid input accepted: tcId ${t.tcId}`).toBeNull();
+    }
+  });
+
   it('AES-256-GCM (IV 96 b, tag 128 b)', async () => {
     const tests = all(aesGcm as never);
     expect(tests).toHaveLength(66);

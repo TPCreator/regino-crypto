@@ -2,6 +2,15 @@
 
 *Contact and vulnerability reporting: [SECURITY.md](SECURITY.md).*
 
+**Brief for version 0.6.0 (17 October 2026).** Proposed commit for the review: tag `v0.6.0` on `main`
+(the final commit is fixed when the engagement starts). Changes since the first draft of this brief:
+
+| Version | Added | Files |
+|---|---|---|
+| 0.4.0 | verification of signed licence tokens and key certificates (Ed25519) | `ts/src/signed.ts` |
+| 0.5.0 | sync between devices: sealed records, group key wrapped per device (ECDH P-256), pairing code | `ts/src/sync.ts` |
+| 0.6.0 | inbox: people without an account (a web form, a document signed in the browser) seal data to a recipient's public key | `ts/src/inbox.ts` |
+
 This document scopes an independent security review of **regino-crypto**, an encryption core
 shared by several offline-first apps that store sensitive personal data – including
 special-category data under GDPR art. 9. License: MIT OR Apache-2.0. The code is public so users
@@ -92,7 +101,8 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
 
 - Tests on every change: `cargo test --workspace`, `cd ts && npx vitest run --coverage` (100 % coverage enforced).
 - Fixed cross-language vectors (Rust ↔ TS) for the recovery key; snapshot of the word list.
-- **Wycheproof** vectors (`testvectors/wycheproof/`): XChaCha20-Poly1305, AES-256-GCM (96-bit IV), HKDF-SHA256, Ed25519 – valid inputs accepted, invalid rejected.
+- **Wycheproof** vectors (`testvectors/wycheproof/`): XChaCha20-Poly1305, AES-256-GCM (96-bit IV), HKDF-SHA256, Ed25519, ECDH P-256 with raw points (incl. invalid-curve and wrong-curve attacks) – valid inputs accepted, invalid rejected.
+- Fixed format vectors that must keep opening in future versions: a backup made by 0.1.0, an inbox message made by 0.6.0.
 - **cargo-deny** (`deny.toml`): RustSec advisories, yanked crates, license allow-list, crates.io only. **npm audit** for `ts/`.
 - CI actions pinned to commit hashes, read-only token. Releases attach CycloneDX SBOMs and SHA-256 checksums.
 
