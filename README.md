@@ -8,7 +8,7 @@ Encryption core for apps that protect sensitive personal data. Published so anyo
 |---|---|
 | `vault/` (Rust, `regino-vault`) | Encrypted local database – SQLite + **SQLCipher (AES-256)**, key in the OS keystore (Windows Credential Manager), safe backup writes |
 | `keys/` (Rust, `regino-keys`) | **Argon2id** (key from password), **XChaCha20-Poly1305** (key wrapping and data sealing with authenticated context), **Shamir 2-of-3** (key splitting with integrity check), **recovery-code key** (HKDF-SHA256, identical to the TypeScript side) |
-| `ts/` (TypeScript, `@regino/crypto`) | Recovery code – **12 Slovak words** by default (128 bits), optionally **24 words** (256 bits), with checksum; **printable recovery sheet** with QR code (data only, no address, generated offline), encrypted backups (**HKDF-SHA256 → AES-256-GCM**), PIN for switching users |
+| `ts/` (TypeScript, `@regino/crypto`) | Recovery code – **12 Slovak words** by default (128 bits), optionally **24 words** (256 bits), with checksum; **printable recovery sheet** with QR code (data only, no address, generated offline), encrypted backups (**HKDF-SHA256 → AES-256-GCM**), PIN for switching users, **sync between devices** (records sealed with a group key, group key wrapped per device with ECDH P-256, pairing code) |
 
 ## How it fits together (example)
 
@@ -44,6 +44,7 @@ Please report vulnerabilities privately – see [SECURITY.md](SECURITY.md).
 
 ## Changelog
 
+- **0.5.0 (2026-10-17):** sync between devices (`sync.ts`): group key, records sealed with HKDF-SHA256 → AES-256-GCM and the context bound as additional data, device key pairs (ECDH P-256, non-extractable private key), group key wrapped for a device (ephemeral ECDH + HKDF-SHA256 → AES-256-GCM), 6-digit pairing code. WebCrypto only, no new libraries.
 - **0.4.0 (2026-10-16):** verification of signed tokens (`signed.ts`): Ed25519 via `@noble/ed25519` (strict RFC 8032), key certificates from built-in root keys, key lists, Wycheproof Ed25519 vectors. Vault: `cipher_memory_security` left off (crashed on Windows, see `AUDIT.md`).
 - **0.3.0 (2026-10-16):** the app name for backups is **required** (`encryptBackup(secret, payload, createdAt, app)`, `decryptBackup(secret, file, app)`) – the default value was removed; the `<app>-backup` format and the keys are unchanged, old backups open with the same app name. Audit preparation: `AUDIT.md`, Wycheproof test vectors, cargo-deny and npm audit in CI.
 - **0.2.0 (2026-10-16):** recovery code of 12 words (default) or 24 words; recovery sheet with QR code (`recoverySheetHtml`, `recoveryQrSvg`); `wordsToSecret` also accepts the text from the QR code; `recoveryKey` / `regino_keys::recovery::recovery_key`; the `open-backup.html` tool accepts 12 or 24 words and a photo of the QR code. **Backups and 24-word codes from 0.1.0 remain valid** (tested with a fixed backup from 0.1.0).
