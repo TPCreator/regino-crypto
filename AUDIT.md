@@ -13,14 +13,15 @@ can verify our claims.
 |---|---|---|---|
 | `keys/` (`regino-keys`) | Rust | `kdf.rs`, `wrap.rs`, `recovery.rs`, `shamir.rs`, `lib.rs` | password KDF, key wrapping and sealing, recovery-code key, 2-of-3 key splitting |
 | `vault/` (`regino-vault`) | Rust | `lib.rs`, `keystore.rs`, `backups.rs` | encrypted local SQLite (SQLCipher), DB key in the OS keystore, backup file writing |
-| `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`) | `backup.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts` | encrypted backups, recovery phrase (12/24 Slovak words, QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates |
+| `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`) | `backup.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts`, `sync.ts` | encrypted backups, recovery phrase (12/24 Slovak words, QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates, sync between devices (sealed records, per-device wrapped group key, pairing code) |
 | `tools/open-backup.html` | built from `ts/tools/` | | public offline tool that opens any backup with the recovery phrase |
 
 Size: about 1 250 lines of non-test code. The commit to review is fixed when the engagement starts
 (apps pin the core to a commit; see `Cargo.toml` / `package.json` of the apps).
 
 **Out of scope:** the apps that use the core, the Android storage plugin
-(`@capacitor-community/sqlite`, SQLCipher on Android), sync and server (not built yet), OS keystore
+(`@capacitor-community/sqlite`, SQLCipher on Android), the sync server and transport (only the
+sealing in `sync.ts` is in scope), OS keystore
 internals, and third-party crates except whether we use them correctly.
 
 ## 2. Threat model
@@ -72,6 +73,11 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
     memory (`VirtualLock` error 1453, working-set quota) and the process crashed with a stack overflow.
     Without it, freed SQLite memory (e.g. decrypted page cache) is not wiped or locked against paging;
     key buffers are still wiped by SQLCipher and `zeroize`. Is this acceptable, or is there a safer setup?
+13. `sync.ts`: AES-256-GCM with random 96-bit nonces under one record key per group (the number of
+    records per key stays far below 2^32); HKDF with a zero salt for the record key; ECDH P-256
+    (not X25519, for WebView support) with salt = ephemeral ‖ device public key; the pairing code
+    is 6 digits from SHA-256 (slight modulo bias). Is the context binding (`sync record v1|…` as AAD)
+    sufficient against moving records between groups, tables or ids?
 
 ## 5. Existing assurance
 
