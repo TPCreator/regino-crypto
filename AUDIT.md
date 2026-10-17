@@ -13,15 +13,15 @@ can verify our claims.
 |---|---|---|---|
 | `keys/` (`regino-keys`) | Rust | `kdf.rs`, `wrap.rs`, `recovery.rs`, `shamir.rs`, `lib.rs` | password KDF, key wrapping and sealing, recovery-code key, 2-of-3 key splitting |
 | `vault/` (`regino-vault`) | Rust | `lib.rs`, `keystore.rs`, `backups.rs` | encrypted local SQLite (SQLCipher), DB key in the OS keystore, backup file writing |
-| `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`) | `backup.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts`, `sync.ts` | encrypted backups, recovery phrase (12/24 Slovak words, QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates, sync between devices (sealed records, per-device wrapped group key, pairing code) |
+| `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`) | `backup.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts`, `sync.ts`, `inbox.ts` | encrypted backups, recovery phrase (12/24 Slovak words, QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates, sync between devices (sealed records, per-device wrapped group key, pairing code), inbox (anonymous senders seal data to a recipient's public key) |
 | `tools/open-backup.html` | built from `ts/tools/` | | public offline tool that opens any backup with the recovery phrase |
 
-Size: about 1 250 lines of non-test code. The commit to review is fixed when the engagement starts
+Size: about 1 400 lines of non-test code. The commit to review is fixed when the engagement starts
 (apps pin the core to a commit; see `Cargo.toml` / `package.json` of the apps).
 
 **Out of scope:** the apps that use the core, the Android storage plugin
 (`@capacitor-community/sqlite`, SQLCipher on Android), the sync server and transport (only the
-sealing in `sync.ts` is in scope), OS keystore
+sealing in `sync.ts` and `inbox.ts` is in scope), the web page that delivers the inbox code to the browser, OS keystore
 internals, and third-party crates except whether we use them correctly.
 
 ## 2. Threat model
@@ -34,6 +34,7 @@ Assets: personal financial records; special-category personal data (e.g. health)
 | Anyone who obtains a backup file (OneDrive, Google Drive, e-mail) | offline attack on the file | cannot decrypt, cannot alter it undetected (incl. header fields) |
 | The app operator | runs future sync and server, publishes the apps | never able to decrypt user data; no single 2-of-3 share opens a key |
 | Another member of a shared household device | uses the app UI | PIN only stops switching to another user; it is **not** a data-protection boundary |
+| The server in the middle of an inbox (web form → practice) | stores and forwards sealed messages, serves the practice's public key | cannot read messages; a swapped public key is noticed by the practice app via the fingerprint (a server that serves malicious page code is out of scope – see question 14) |
 | Wrong context / swapped blobs | substitutes one client's wrapped key or sealed record for another | rejected (context is authenticated) |
 
 **Not protected:** malware or an attacker inside the unlocked user session; coerced unlock;
@@ -51,6 +52,7 @@ side channels on the user's own device beyond what the libraries provide.
 | Password KDF | Argon2id v1.3 (RustCrypto `argon2`) | default m = 64 MiB, t = 3, p = 1; minimum enforced m = 19 MiB, t = 2; salt 16 B; parameters stored by the caller next to the wrapped key |
 | Key splitting | Shamir over GF(256) (`blahaj` 0.6) | share `RGK1 ‖ threshold ‖ fingerprint(8) ‖ share`; fingerprint = SHA-256(`"regino-keys/shamir/v1"` ‖ key)[0..8] to reject foreign or damaged shares |
 | Signed tokens (licences) | Ed25519 verify only (`@noble/ed25519` 3.2.0, strict RFC 8032, `zip215: false`) | token `PREFIX1.<payload b64url>.<sig b64url>`, signature over the JSON bytes; apps ship root public keys, every other key needs a root-signed certificate (`RG1.…`, `typ: cert`, `nbf`/`exp`); a fetched key list cannot add keys; caller checks prefix, `product`, `use`; revoked kids dropped |
+| Inbox (anonymous sender → recipient) | ECDH P-256 + HKDF-SHA256 → AES-256-GCM (WebCrypto) | recipient key pair, private key exported once as PKCS#8 (the app keeps it wrapped), imported non-extractable; per message an ephemeral key; HKDF salt = ephemeral ‖ recipient public key (65 + 65 B), info `"inbox seal v1|<context>"`; IV 96 b random; AAD `"inbox message v1|<context>"`; JSON `{v, e, n, c}` (base64); fingerprint = SHA-256(`"inbox fingerprint v1|"` ‖ base64(public key))[0..10] |
 | User-switch PIN | PBKDF2-SHA256 (WebCrypto) | 4–8 digits, 200 000 iterations, salt 16 B; stored `pbkdf2$iter$salt$hash`; offline brute force is trivial by design (UI barrier only) |
 
 Randomness: OS CSPRNG (`getrandom`, `crypto.getRandomValues`). Rust secrets use `zeroize`;
@@ -78,6 +80,13 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
     (not X25519, for WebView support) with salt = ephemeral ‖ device public key; the pairing code
     is 6 digits from SHA-256 (slight modulo bias). Is the context binding (`sync record v1|…` as AAD)
     sufficient against moving records between groups, tables or ids?
+
+14. `inbox.ts`: anonymous sealing to a recipient's P-256 key (ECIES-like, ephemeral key per
+    message). Is the HKDF salt/info and the context as AAD sufficient? The private key is exported as
+    PKCS#8 so all devices of a practice can use it – the app keeps it wrapped by its own keys; any
+    weakness in that? The page code comes from our server, so a compromised server could serve code
+    that leaks form data before sealing – what mitigations do you recommend (SRI, a separate static
+    origin, publishing hashes of the page code)?
 
 ## 5. Existing assurance
 

@@ -8,7 +8,7 @@ Encryption core for apps that protect sensitive personal data. Published so anyo
 |---|---|
 | `vault/` (Rust, `regino-vault`) | Encrypted local database – SQLite + **SQLCipher (AES-256)**, key in the OS keystore (Windows Credential Manager), safe backup writes |
 | `keys/` (Rust, `regino-keys`) | **Argon2id** (key from password), **XChaCha20-Poly1305** (key wrapping and data sealing with authenticated context), **Shamir 2-of-3** (key splitting with integrity check), **recovery-code key** (HKDF-SHA256, identical to the TypeScript side) |
-| `ts/` (TypeScript, `@regino/crypto`) | Recovery code – **12 Slovak words** by default (128 bits), optionally **24 words** (256 bits), with checksum; **printable recovery sheet** with QR code (data only, no address, generated offline), encrypted backups (**HKDF-SHA256 → AES-256-GCM**), PIN for switching users, **sync between devices** (records sealed with a group key, group key wrapped per device with ECDH P-256, pairing code) |
+| `ts/` (TypeScript, `@regino/crypto`) | Recovery code – **12 Slovak words** by default (128 bits), optionally **24 words** (256 bits), with checksum; **printable recovery sheet** with QR code (data only, no address, generated offline), encrypted backups (**HKDF-SHA256 → AES-256-GCM**), PIN for switching users, **sync between devices** (records sealed with a group key, group key wrapped per device with ECDH P-256, pairing code), **inbox** (people without an account – e.g. a client filling in a form or signing a document in the browser – seal data to a practice's public key; the server carries it but cannot open it) |
 
 ## How it fits together (example)
 
@@ -44,6 +44,7 @@ Please report vulnerabilities privately – see [SECURITY.md](SECURITY.md).
 
 ## Changelog
 
+- **0.6.0 (2026-10-17):** inbox (`inbox.ts`): a recipient key pair (ECDH P-256, private key exported once as PKCS#8 for the app to keep wrapped, imported non-extractable), messages sealed to the public key with an ephemeral ECDH key + HKDF-SHA256 → AES-256-GCM and the context bound as additional data, key fingerprint so the app notices a swapped key on the server. For web forms and documents signed in the browser (Dôverník). WebCrypto only, no new libraries.
 - **0.5.0 (2026-10-17):** sync between devices (`sync.ts`): group key, records sealed with HKDF-SHA256 → AES-256-GCM and the context bound as additional data, device key pairs (ECDH P-256, non-extractable private key), group key wrapped for a device (ephemeral ECDH + HKDF-SHA256 → AES-256-GCM), 6-digit pairing code. WebCrypto only, no new libraries.
 - **0.4.0 (2026-10-16):** verification of signed tokens (`signed.ts`): Ed25519 via `@noble/ed25519` (strict RFC 8032), key certificates from built-in root keys, key lists, Wycheproof Ed25519 vectors. Vault: `cipher_memory_security` left off (crashed on Windows, see `AUDIT.md`).
 - **0.3.0 (2026-10-16):** the app name for backups is **required** (`encryptBackup(secret, payload, createdAt, app)`, `decryptBackup(secret, file, app)`) – the default value was removed; the `<app>-backup` format and the keys are unchanged, old backups open with the same app name. Audit preparation: `AUDIT.md`, Wycheproof test vectors, cargo-deny and npm audit in CI.
