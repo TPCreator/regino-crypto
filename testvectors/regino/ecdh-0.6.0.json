@@ -1,0 +1,25 @@
+{
+  "inbox": {
+    "privateKey": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgr9fMlcVqZvtLi603/H1ujfkrgRBKcbxU+p7w5xl4Su6hRANCAASHhZbezNqideLge4LDza21oxnZAFhn7N+qtmJEX2oNHRr4LFtIEeUxuC+OzblPrMQN1JvV5L3j8wl5DqnzJOwr",
+    "context": "vector|inbox",
+    "message": {
+      "v": 1,
+      "e": "BCsSvJnIpoEbS9ESF6Kxh7XBJS3upd1OYJjTsNmuKwPRYooVCMCkAeO80f9NBKSe6rIk9okoiF6MLitn6Jp9jWA=",
+      "n": "RVJ08+cKZi0/LrSu",
+      "c": "LJScYGO6MZHOJmjxChs01JV2dMmGPrBVmyrY+a/YeKNHQd4S6QJWG0QhML0="
+    },
+    "plaintext": "Ahoj, toto je pevný vektor."
+  },
+  "sync": {
+    "devicePublic": "BGpelKmJSdeKumeNRBtWqKRhnMF1cQ3YO+zHyp0ovenNDUCc2wxs+Gu8nyZEwWW89WIXQZ+FJ1iZy6X+aJIal5w=",
+    "devicePrivate": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgrlCzUVkN88ZVmoB6Os4Ky5+bTxHt2AcZBkd6PjEbGxihRANCAARqXpSpiUnXirpnjUQbVqikYZzBdXEN2Dvsx8qdKL3pzQ1AnNsMbPhrvJ8mRMFlvPViF0GfhSdYmcul/miSGpec",
+    "context": "vector|sync",
+    "wrapped": {
+      "v": 1,
+      "e": "BCK85ZOxy1Q8zCvLBF9yaaFKaSkgwxd7whZU2eOlhaaU37ZL9a/mBdc3pjcauEnIIvI50qp5XT7Zj0od1fMupb4=",
+      "n": "8mbGShF+76T4Khku",
+      "c": "97XrmvvcIJUVeDTPkJYV+VL13b+UVt0W6w0Dt0DU0UTRTncOnsUSpSKr5EeJaxUp"
+    },
+    "groupKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+  }
+}

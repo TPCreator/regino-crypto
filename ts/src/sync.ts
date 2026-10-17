@@ -11,36 +11,19 @@
  * - Pairing: the new device shows its public key (e.g. as a QR code); both devices show a short
  *   code derived from it, so people can confirm that the right device was paired.
  */
+import { b64, checkP256Point, ECDH, sealingKey, unb64 } from "./ecdh";
+
 export const SYNC_VERSION = 1;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const ECDH = { name: "ECDH", namedCurve: "P-256" } as const;
-
-function b64(bytes: Uint8Array): string {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
-}
-
-function unb64(text: string): Uint8Array {
-  const s = atob(text);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-  return out;
-}
 
 function checkGroupKey(key: Uint8Array): void {
   if (!(key instanceof Uint8Array) || key.length !== 32)
     throw new Error("The group key must have 32 bytes.");
 }
 
-function checkPublicKey(key: Uint8Array): void {
-  if (!(key instanceof Uint8Array) || key.length !== 65 || key[0] !== 4)
-    throw new Error(
-      "Invalid device public key (expected an uncompressed P-256 point).",
-    );
-}
+const checkPublicKey = (key: Uint8Array) => checkP256Point(key, "device");
 
 /** A new random group key (32 bytes). Keep it only wrapped (for devices, by the recovery key). */
 export function newGroupKey(): Uint8Array {
@@ -144,44 +127,13 @@ export interface WrappedGroupKey {
   c: string;
 }
 
-async function wrapKey(
+const wrapKey = (
   privateKey: CryptoKey,
   otherPublic: Uint8Array,
   ephemeralPublic: Uint8Array,
   devicePublic: Uint8Array,
   context: string,
-): Promise<CryptoKey> {
-  const other = await crypto.subtle.importKey(
-    "raw",
-    otherPublic as BufferSource,
-    ECDH,
-    false,
-    [],
-  );
-  const shared = await crypto.subtle.deriveBits(
-    { name: "ECDH", public: other },
-    privateKey,
-    256,
-  );
-  const base = await crypto.subtle.importKey("raw", shared, "HKDF", false, [
-    "deriveKey",
-  ]);
-  const salt = new Uint8Array(130);
-  salt.set(ephemeralPublic, 0);
-  salt.set(devicePublic, 65);
-  return crypto.subtle.deriveKey(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt,
-      info: enc.encode(`sync wrap v${SYNC_VERSION}|${context}`),
-    },
-    base,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"],
-  );
-}
+) => sealingKey(privateKey, otherPublic, ephemeralPublic, devicePublic, `sync wrap v${SYNC_VERSION}|${context}`);
 
 /** Wraps the group key for one device (its public key from the pairing QR code). */
 export async function wrapForDevice(

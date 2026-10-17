@@ -13,34 +13,17 @@
  * - Fingerprint: the recipient's app compares the fingerprint of the key the server publishes with
  *   its own, so a server that swaps the key is noticed.
  */
+import { b64, checkP256Point, ECDH, sealingKey, unb64 } from "./ecdh";
+
 export const INBOX_VERSION = 1;
 
 const enc = new TextEncoder();
-const ECDH = { name: "ECDH", namedCurve: "P-256" } as const;
-
-// In blocks – documents can have megabytes and one character at a time would be very slow.
-function b64(bytes: Uint8Array): string {
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000)
-    s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(s);
-}
-
-function unb64(text: string): Uint8Array {
-  const s = atob(text);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-  return out;
-}
 
 function b64url(text: string): Uint8Array {
   return unb64(text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "="));
 }
 
-function checkPublicKey(key: Uint8Array): void {
-  if (!(key instanceof Uint8Array) || key.length !== 65 || key[0] !== 4)
-    throw new Error("Invalid inbox public key (expected an uncompressed P-256 point).");
-}
+const checkPublicKey = (key: Uint8Array) => checkP256Point(key, "inbox");
 
 function checkContext(context: string): void {
   if (typeof context !== "string" || context === "")
@@ -96,27 +79,13 @@ export interface InboxMessage {
   c: string;
 }
 
-async function messageKey(
+const messageKey = (
   privateKey: CryptoKey,
   otherPublic: Uint8Array,
   ephemeralPublic: Uint8Array,
   recipientPublic: Uint8Array,
   context: string,
-): Promise<CryptoKey> {
-  const other = await crypto.subtle.importKey("raw", otherPublic as BufferSource, ECDH, false, []);
-  const shared = await crypto.subtle.deriveBits({ name: "ECDH", public: other }, privateKey, 256);
-  const base = await crypto.subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
-  const salt = new Uint8Array(130);
-  salt.set(ephemeralPublic, 0);
-  salt.set(recipientPublic, 65);
-  return crypto.subtle.deriveKey(
-    { name: "HKDF", hash: "SHA-256", salt, info: enc.encode(`inbox seal v${INBOX_VERSION}|${context}`) },
-    base,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"],
-  );
-}
+) => sealingKey(privateKey, otherPublic, ephemeralPublic, recipientPublic, `inbox seal v${INBOX_VERSION}|${context}`);
 
 const messageAad = (context: string) => enc.encode(`inbox message v${INBOX_VERSION}|${context}`);
 
