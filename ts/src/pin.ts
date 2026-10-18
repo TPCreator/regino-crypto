@@ -4,6 +4,8 @@
  * from switching to the administrator.
  * PBKDF2-SHA256 hash with a random salt: "pbkdf2$<iterations>$<salt hex>$<hash hex>".
  */
+import { equalBytes } from './bytes';
+
 const ITERATIONS = 200_000;
 const PIN = /^\d{4,8}$/;
 
@@ -49,8 +51,6 @@ export async function verifyPin(pin: string, stored: string): Promise<boolean> {
     return false;
   if (!validPin(pin)) return false;
   const got = await derive(pin, unhex(salt!), iterations);
-  // Comparison without early exit.
-  let diff = got.length ^ hash.length;
-  for (let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ (hash.charCodeAt(i) | 0);
-  return diff === 0;
+  const enc = new TextEncoder();
+  return equalBytes(enc.encode(got), enc.encode(hash));
 }

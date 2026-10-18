@@ -1,3 +1,4 @@
+import { equalBytes } from './bytes';
 import { WORDLIST_SK } from './wordlist-sk';
 
 /**
@@ -76,7 +77,7 @@ export async function wordsToSecret(
   if (qr) {
     if (!qr.ok) return { ok: false, error: { code: 'qr' } };
     const check = await sha2(qr.secret);
-    if (check[0] !== qr.check[0] || check[1] !== qr.check[1]) return { ok: false, error: { code: 'qr' } };
+    if (!equalBytes(check, qr.check)) return { ok: false, error: { code: 'qr' } };
     return { ok: true, secret: qr.secret };
   }
   const words = input.split(/[\s,;.]+/).filter(Boolean);
@@ -95,7 +96,8 @@ export async function wordsToSecret(
   }
   const secret = new Uint8Array(BYTES[count]);
   for (let b = 0; b < secret.length; b++) secret[b] = parseInt(bits.slice(b * 8, b * 8 + 8), 2);
-  if ((await checksumBits(secret)) !== bits.slice(secret.length * 8))
+  const enc = new TextEncoder();
+  if (!equalBytes(enc.encode(await checksumBits(secret)), enc.encode(bits.slice(secret.length * 8))))
     return { ok: false, error: { code: 'checksum' } };
   return { ok: true, secret };
 }

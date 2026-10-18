@@ -7,6 +7,7 @@
 use crate::{Error, Key, KEY_LEN};
 use blahaj::{Share, Sharks};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 const MAGIC: &[u8; 4] = b"RGK1";
 
@@ -59,7 +60,8 @@ pub fn combine(parts: &[Vec<u8>]) -> Result<Key, Error> {
     let secret = Sharks(threshold).recover(shares.iter()).map_err(|_| Error::BadShares)?;
     let bytes: [u8; KEY_LEN] = secret.as_slice().try_into().map_err(|_| Error::BadShares)?;
     let key = Key::from_bytes(bytes);
-    if fingerprint(&key) != fp {
+    // The fingerprint verifies the key – compared in constant time like any other secret-derived value.
+    if !bool::from(fingerprint(&key).ct_eq(&fp)) {
         return Err(Error::BadShares);
     }
     Ok(key)

@@ -30,3 +30,13 @@ describe("ecdh (shared by sync and inbox)", () => {
     expect(b64(group)).toBe(v.sync.groupKey);
   });
 });
+
+describe("equalBytes", () => {
+  it("compares content and length", async () => {
+    const { equalBytes } = await import("./bytes");
+    expect(equalBytes(new Uint8Array([1, 2]), new Uint8Array([1, 2]))).toBe(true);
+    expect(equalBytes(new Uint8Array([1, 2]), new Uint8Array([1, 3]))).toBe(false);
+    expect(equalBytes(new Uint8Array([1, 2]), new Uint8Array([1, 2, 3]))).toBe(false);
+    expect(equalBytes(new Uint8Array(0), new Uint8Array(0))).toBe(true);
+  });
+});
