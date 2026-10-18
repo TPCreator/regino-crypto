@@ -9,7 +9,7 @@ Severities are ours. A formal auditor should treat these as known and start from
 | # | Severity | Where | Finding | Status |
 |---|---|---|---|---|
 | 1 | High | `ts/src/sync.ts` `pairingCode` | 6-digit code over the new device's key alone is forgeable by whoever carries the key | **mitigated**: the app scans the key from the QR code directly, the server never carries it; requirement written down in `docs/PAIRING.md` |
-| 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | **implemented in the app** (Dôverník main a9a8d91, 2026-10-18: published-key check every 6 h, fingerprint in the app and on a printed leaflet, fingerprint and trust statement in the form, SRI for the form script), waiting for production deployment; core docs corrected, requirements in `docs/INBOX.md`; issue #2 |
+| 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | **fixed in the app** (Dôverník a9a8d91, deployed to production 2026-10-18: published-key check every 6 h, fingerprint in the app and on a printed leaflet, fingerprint and trust statement in the form, SRI for the form script); core docs corrected, requirements in `docs/INBOX.md`; issue #2 closed |
 | 3 | High | `ts/src/sync.ts` `unwrapForDevice` | ephemeral public key and plaintext length not validated | **fixed** |
 | 4 | High | README, `keys/src/lib.rs`, `keys/tests/keys.rs` | "unreadable in all backups too" is false for backups made before the key was discarded; the test only checks a wrong key | docs **fixed**, test and app behaviour open; issue #3 |
 | 5 | Medium | `ts/src/sync.ts` `wrapForDevice` | AAD is the bare context, records use `sync record v1\|context` | open – next format version; issue #4 |
@@ -84,8 +84,9 @@ with its own (mismatch fails publishing, warns and is logged); the fingerprint i
 services with a printable leaflet (address, QR code, fingerprint); the form shows the fingerprint of
 the key it uses and says that without something to compare it with the client relies on the site
 operator; the form script is loaded with SRI and CI checks it against the sources. A separate static
-origin was not done (same operator, no real gain). Issue #2 closes once this is deployed to the
-production server.
+origin was not done (same operator, no real gain). Deployed to the production server on 2026-10-18
+(11:14 UTC); no practice page was published yet, so the live check of the page is pending the first
+published practice. Issue #2 closed.
 
 ## 3. `unwrapForDevice` did not validate the ephemeral key or the result (High, fixed)
 
