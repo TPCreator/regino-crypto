@@ -3,18 +3,19 @@
 An informal review of `v0.6.0` (no written report) before a paid independent audit. The list below is
 our record of the findings, re-verified against the code, with what we changed. Open items are
 GitHub issues labelled `pre-audit-review`: [#2](https://github.com/TPCreator/regino-crypto/issues/2) (finding 2), [#3](https://github.com/TPCreator/regino-crypto/issues/3) (finding 4), [#4](https://github.com/TPCreator/regino-crypto/issues/4) (findings 5 and 7), [#5](https://github.com/TPCreator/regino-crypto/issues/5) (finding 9).
-Severities are ours. A formal auditor should treat these as known and start from question 15–17 in
-[AUDIT.md](../AUDIT.md) for the open ones.
+Severities are ours. A formal auditor should treat these as known. Since 0.8.0 every question in
+[AUDIT.md](../AUDIT.md) section 4 carries our answer and a status; findings 6 and 8 remain questions
+for the auditor (13 and 14).
 
 | # | Severity | Where | Finding | Status |
 |---|---|---|---|---|
-| 1 | High | `ts/src/sync.ts` `pairingCode` | 6-digit code over the new device's key alone is forgeable by whoever carries the key | **mitigated**: the app scans the key from the QR code directly, the server never carries it; requirement written down in `docs/PAIRING.md` |
+| 1 | High | `ts/src/sync.ts` `pairingCode` | 6-digit code over the new device's key alone is forgeable by whoever carries the key | **mitigated**: the app scans the key from the QR code directly, the server never carries it; requirement written down in `docs/PAIRING.md`. Since 0.8.0 the core also has a SAS with a commitment for apps that move keys through a server |
 | 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | **fixed in the app** (Dôverník a9a8d91, deployed to production 2026-10-18: published-key check every 6 h, fingerprint in the app and on a printed leaflet, fingerprint and trust statement in the form, SRI for the form script); core docs corrected, requirements in `docs/INBOX.md`; issue #2 closed |
 | 3 | High | `ts/src/sync.ts` `unwrapForDevice` | ephemeral public key and plaintext length not validated | **fixed** |
-| 4 | High | README, `keys/src/lib.rs`, `keys/tests/keys.rs` | "unreadable in all backups too" is false for backups made before the key was discarded; the test only checks a wrong key | docs **fixed**, test and app behaviour open; issue #3 |
-| 5 | Medium | `ts/src/sync.ts` `wrapForDevice` | AAD is the bare context, records use `sync record v1\|context` | open – next format version; issue #4 |
+| 4 | High | README, `keys/src/lib.rs`, `keys/tests/keys.rs` | "unreadable in all backups too" is false for backups made before the key was discarded; the test only checks a wrong key | **fixed** in 0.8.0: docs, test `shredding_reaches_only_backups_made_after_deletion`, `discard_backups_before` for the apps; decision: no key epoch (AUDIT.md question 16); issue #3 |
+| 5 | Medium | `ts/src/sync.ts` `wrapForDevice` | AAD is the bare context, records use `sync record v1\|context` | **fixed** in 0.8.0: wrapped group keys v2 bind `sync wrap v2\|context`; issue #4 |
 | 6 | Medium | `ts/src/sync.ts` `recordKey` | HKDF with a zero salt for the record key | open – question 13 for the auditor |
-| 7 | Low | `ts/src/sync.ts` `pairingCode` | modulo bias of the 6-digit code | open – fix with 5; issue #4 |
+| 7 | Low | `ts/src/sync.ts` `pairingCode` | modulo bias of the 6-digit code | **fixed** in 0.8.0: rejection sampling, label `sync pairing v2`; issue #4 |
 | 8 | Low | `ts/src/inbox.ts` `newInboxKeys` | the inbox private key is exported as PKCS#8 and lives wrapped in every device of a practice | open – question 14 for the auditor |
 | 9 | Low | README, AUDIT.md | "100 % coverage" is true for TypeScript only, Rust coverage is not measured | docs **fixed**, measurement open; issue #5 |
 | 10 | Low | `.github/workflows/*` | `npm install` instead of `npm ci`, `cargo` without `--locked`, release build and upload in one job with a write token | **fixed** |
@@ -159,3 +160,23 @@ app-level redesign.
 - Release split into a `build` job (read-only token, `persist-credentials: false`) that produces the
   artefacts and a `publish` job that only downloads them and uploads to the release with
   `contents: write`.
+
+---
+
+## Self-review for 0.8.0 (2026-10-18)
+
+Before the paid audit we answered our own 17 questions (AUDIT.md section 4) on the branch
+`claude/v0.8-self-review`. Summary:
+
+- **Fixed in code, with tests:** Q1 constant-time checks; Q9 backups (directory `fsync`, the new file
+  is never pruned, stale temporary files removed); Q13 / finding 7 unbiased pairing code; Q17 /
+  finding 5 wrapped group keys v2; Q10 hardening (`verifyWithKeys` refuses certificate payloads).
+- **Decided and implemented:** Q4 12 words stay the default; Q15 QR pairing stays, plus a SAS with a
+  commitment for pairing through a server (`docs/PAIRING.md`); Q16 / finding 4 no key epoch, instead
+  `discard_backups_before` and an app duty.
+- **Verified with a new test:** Q2 AAD binding without a length prefix, Q6 blahaj coefficients,
+  Q7 encrypted WAL and `rekey` in WAL mode, Q8 separation of 16- and 32-byte backup secrets, Q11 tool
+  integrity (CI + `SHA256SUMS.txt`).
+- **For the auditor (our view written down):** Q3, Q5, Q12, Q14, findings 6 and 8 (part of Q13/Q14).
+
+Open from this list: finding 9 (Rust coverage measurement, issue #5).
