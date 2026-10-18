@@ -9,7 +9,7 @@ Severities are ours. A formal auditor should treat these as known and start from
 | # | Severity | Where | Finding | Status |
 |---|---|---|---|---|
 | 1 | High | `ts/src/sync.ts` `pairingCode` | 6-digit code over the new device's key alone is forgeable by whoever carries the key | **mitigated**: the app scans the key from the QR code directly, the server never carries it; requirement written down in `docs/PAIRING.md` |
-| 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | **open in the app** (Dôverník uses no fingerprint yet; plan: the app checks the published key, fingerprint in the app and on paper); core docs corrected, requirements in `docs/INBOX.md`; issue #2 |
+| 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | **implemented in the app** (Dôverník main a9a8d91, 2026-10-18: published-key check every 6 h, fingerprint in the app and on a printed leaflet, fingerprint and trust statement in the form, SRI for the form script), waiting for production deployment; core docs corrected, requirements in `docs/INBOX.md`; issue #2 |
 | 3 | High | `ts/src/sync.ts` `unwrapForDevice` | ephemeral public key and plaintext length not validated | **fixed** |
 | 4 | High | README, `keys/src/lib.rs`, `keys/tests/keys.rs` | "unreadable in all backups too" is false for backups made before the key was discarded; the test only checks a wrong key | docs **fixed**, test and app behaviour open; issue #3 |
 | 5 | Medium | `ts/src/sync.ts` `wrapForDevice` | AAD is the bare context, records use `sync record v1\|context` | open – next format version; issue #4 |
@@ -77,6 +77,15 @@ in [`docs/INBOX.md`](../docs/INBOX.md). **Open in the app:** (a) the app verifie
 after publishing and on every download, (b) fingerprint shown in the app and on printed material,
 (c) the form shows the fingerprint of the key it uses, (d) SRI or a separate static origin for the
 form script. Tracked in the Dôverník repository; here the item stays open until (a)–(c) exist.
+
+**Update 2026-10-18:** Dôverník reports (a)–(d) implemented in its `main` at a9a8d91: the app fetches the
+public practice page from its public address after publishing and every 6 hours and compares the key
+with its own (mismatch fails publishing, warns and is logged); the fingerprint is in Settings › Online
+services with a printable leaflet (address, QR code, fingerprint); the form shows the fingerprint of
+the key it uses and says that without something to compare it with the client relies on the site
+operator; the form script is loaded with SRI and CI checks it against the sources. A separate static
+origin was not done (same operator, no real gain). Issue #2 closes once this is deployed to the
+production server.
 
 ## 3. `unwrapForDevice` did not validate the ephemeral key or the result (High, fixed)
 
