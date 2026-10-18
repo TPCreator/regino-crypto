@@ -141,6 +141,10 @@ export async function certifiedKeys(
 /**
  * Verifies a token signed by a certified key for `product` and `use`: the `kid` in the payload must
  * name such a key, and `product` in the payload must match. Returns the payload or null.
+ *
+ * The prefix is not covered by the signature (it only names the token kind), so the payload decides:
+ * a certificate payload (`typ: "cert"`) is never accepted here, even if a key were ever used both as
+ * a root and as a product key (question 10).
  */
 export async function verifyWithKeys(
   token: string,
@@ -150,6 +154,6 @@ export async function verifyWithKeys(
   const kid = peekToken(token)?.payload.kid;
   const key = keys.find((k) => k.kid === kid && k.product === expect.product && k.use === expect.use);
   const v = key ? await verifyToken(token, key.pub) : null;
-  if (!v || v.prefix !== expect.prefix || v.payload.product !== expect.product) return null;
+  if (!v || v.prefix !== expect.prefix || v.payload.product !== expect.product || v.payload.typ === 'cert') return null;
   return v.payload;
 }

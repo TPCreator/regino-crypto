@@ -131,6 +131,12 @@ describe('signed tokens', () => {
     const rogue = await keyPair();
     const forged = await sign('DM', { kid: 'demo-2026', product: 'demo' }, rogue.secret);
     expect(await verifyWithKeys(forged, keys, expect_)).toBeNull();
+    // Question 10: the prefix is not signed – a payload with typ "cert" is never a licence, even
+    // if a key were (wrongly) used both as a root and as a product key.
+    const certShaped = await sign('DM', { typ: 'cert', kid: 'demo-2026', product: 'demo' }, product.secret);
+    expect(await verifyWithKeys(certShaped, keys, expect_)).toBeNull();
+    const relabelled = cert.replace(/^RG1\./, 'DM1.');
+    expect(await verifyWithKeys(relabelled, keys, expect_)).toBeNull();
   });
 
   it('certificates: time window, signer, shape', async () => {

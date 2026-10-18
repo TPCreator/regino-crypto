@@ -148,3 +148,24 @@ fn rejects_nonsensical_split() {
 fn key_is_not_printed_to_log() {
     assert_eq!(format!("{:?}", Key::generate().unwrap()), "Key(***)");
 }
+
+/// Question 6: blahaj samples Shamir coefficients uniformly from 0..=255 (the original `sharks`
+/// crate excluded 0). With threshold 2 the share at x = 1 is `a1 XOR secret` in GF(256), so its bytes
+/// must be uniform over all 256 values – including the value equal to the secret (a1 = 0).
+#[test]
+fn shamir_coefficients_are_uniform_including_zero() {
+    let key = Key::from_bytes([0x5a; 32]);
+    let mut counts = [0u32; 256];
+    for _ in 0..2048 {
+        let parts = shamir::split(&key, 2, 2).unwrap();
+        let first = &parts[0];
+        assert_eq!(first[13], 1, "first share is x = 1");
+        for &y in &first[14..] {
+            counts[y as usize] += 1;
+        }
+    }
+    // 65 536 samples, 256 expected per value; bounds are about ±8 standard deviations
+    let (min, max) = (counts.iter().min().unwrap(), counts.iter().max().unwrap());
+    assert!(*min > 120 && *max < 400, "min {min}, max {max}");
+    assert!(counts[0x5a] > 120, "coefficient 0 never drawn");
+}

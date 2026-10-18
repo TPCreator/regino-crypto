@@ -90,4 +90,18 @@ describe('encrypted backup', () => {
     expect(await decryptBackup(secret, { ...d, format: 'demo-backup' }, APP)).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
     await expect(encryptBackup(secret, data, undefined, 'Bad name')).rejects.toThrow();
   });
+
+  // Question 8: 32-byte secrets use the legacy info "<app> backup v1" (0.1.0 backups), 16-byte ones
+  // "<app> backup v1 k128". The length selects the info, so a backup made with one length never
+  // opens with the other – not even with the first 16 bytes of a 32-byte secret.
+  it('16- and 32-byte secrets are separated', async () => {
+    const long = newRecoverySecret(24);
+    const short = long.slice(0, 16);
+    const a = await encryptBackup(long, data, '2026-10-18T10:00:00.000Z', APP);
+    const b = await encryptBackup(short, data, '2026-10-18T10:00:00.000Z', APP);
+    expect(await decryptBackup(short, a, APP)).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
+    expect(await decryptBackup(long, b, APP)).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
+    expect((await decryptBackup(long, a, APP)).ok).toBe(true);
+    expect((await decryptBackup(short, b, APP)).ok).toBe(true);
+  });
 });
