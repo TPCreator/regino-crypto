@@ -10150,6 +10150,14 @@
     }
   }
 
+  // src/bytes.ts
+  function equalBytes(a, b) {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+    return diff === 0;
+  }
+
   // src/wordlist-sk.ts
   var WORDLIST_SK = [
     "abeceda",
@@ -12218,7 +12226,7 @@
     if (qr) {
       if (!qr.ok) return { ok: false, error: { code: "qr" } };
       const check = await sha2(qr.secret);
-      if (check[0] !== qr.check[0] || check[1] !== qr.check[1]) return { ok: false, error: { code: "qr" } };
+      if (!equalBytes(check, qr.check)) return { ok: false, error: { code: "qr" } };
       return { ok: true, secret: qr.secret };
     }
     const words = input.split(/[\s,;.]+/).filter(Boolean);
@@ -12236,7 +12244,8 @@
     }
     const secret = new Uint8Array(BYTES[count]);
     for (let b = 0; b < secret.length; b++) secret[b] = parseInt(bits.slice(b * 8, b * 8 + 8), 2);
-    if (await checksumBits(secret) !== bits.slice(secret.length * 8))
+    const enc2 = new TextEncoder();
+    if (!equalBytes(enc2.encode(await checksumBits(secret)), enc2.encode(bits.slice(secret.length * 8))))
       return { ok: false, error: { code: "checksum" } };
     return { ok: true, secret };
   }

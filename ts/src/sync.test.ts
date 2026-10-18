@@ -5,7 +5,11 @@ import {
   newDeviceKeys,
   newGroupKey,
   openRecord,
+  checkPairingCommitment,
+  newPairingNonce,
   pairingCode,
+  pairingCommitment,
+  pairingSas,
   publicKeyBytes,
   recordKey,
   sealRecord,
@@ -13,7 +17,11 @@ import {
   toBase64,
   unwrapForDevice,
   wrapForDevice,
+  WRAP_VERSION,
 } from "./sync";
+import { sixDigits } from "./bytes";
+// Made by 0.8.0 – test keys only (wrapped key v2, pairing code, SAS).
+import v8 from "../../testvectors/regino/sync-0.8.0.json";
 
 describe("sync records", () => {
   it("seal and open with the same key and context", async () => {
@@ -166,6 +174,63 @@ describe("device keys", () => {
     await expect(
       unwrapForDevice({ v: SYNC_VERSION, e: b64(ephPublic), n: b64(nonce), c: b64(new Uint8Array(c)) }, phone.privateKey, phonePublic, "g1|device|d2"),
     ).rejects.toThrow("cannot be unwrapped");
+  });
+
+  it("wrapped keys are v2 and bind the version label; v1 still opens", async () => {
+    const phone = await newDeviceKeys();
+    const pub = await publicKeyBytes(phone.publicKey);
+    const group = newGroupKey();
+    const w = await wrapForDevice(group, pub, "g|device|d");
+    expect(w.v).toBe(WRAP_VERSION);
+    expect(WRAP_VERSION).toBe(2);
+    // the same blob claimed as v1 (bare context as AAD, v1 HKDF info) does not open
+    await expect(unwrapForDevice({ ...w, v: 1 }, phone.privateKey, pub, "g|device|d")).rejects.toThrow("cannot be unwrapped");
+    await expect(unwrapForDevice({ ...w, v: 3 }, phone.privateKey, pub, "g|device|d")).rejects.toThrow("version");
+    // fixed v2 vector made by 0.8.0
+    const priv = await crypto.subtle.importKey("pkcs8", fromBase64(v8.wrap.devicePrivate) as BufferSource, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+    const g = await unwrapForDevice(v8.wrap.wrapped, priv, fromBase64(v8.wrap.devicePublic), v8.wrap.context);
+    expect(toBase64(g)).toBe(v8.wrap.groupKey);
+  });
+
+  it("pairing code v2 matches the fixed vector (unbiased digits)", async () => {
+    expect(await pairingCode(fromBase64(v8.pairingCode.devicePublic))).toBe(v8.pairingCode.code);
+  });
+
+  it("six digits: rejection sampling, re-hash when every word is rejected", async () => {
+    expect(await sixDigits(new Uint8Array(32))).toBe("000 000");
+    const high = new Uint8Array(32).fill(0xff); // every 32-bit word >= 4 294 000 000 → re-hash
+    const again = new Uint8Array(await crypto.subtle.digest("SHA-256", high));
+    expect(await sixDigits(high)).toBe(await sixDigits(again));
+    const first = new Uint8Array(32).fill(0xff);
+    first.set([0, 0, 0x30, 0x39], 4); // second word = 12345
+    expect(await sixDigits(first)).toBe("012 345");
+  });
+
+  it("SAS with a commitment: both devices agree, a changed nonce or key is caught", async () => {
+    const n = await publicKeyBytes((await newDeviceKeys()).publicKey);
+    const e = await publicKeyBytes((await newDeviceKeys()).publicKey);
+    const nN = newPairingNonce();
+    const nE = newPairingNonce();
+    expect(nN).toHaveLength(16);
+    // 1. new device commits, 2. existing device sends its nonce, 3. new device reveals its nonce
+    const commit = await pairingCommitment(n, e, nN);
+    expect(await checkPairingCommitment(commit, n, e, nN)).toBe(true);
+    const sas = await pairingSas(n, e, nN, nE);
+    expect(sas).toMatch(/^\d{3} \d{3}$/);
+    expect(await pairingSas(n.slice(), e.slice(), nN.slice(), nE.slice())).toBe(sas);
+    // a party in the middle that reveals another nonce, or swapped keys, fails the commitment
+    const other = newPairingNonce();
+    expect(await checkPairingCommitment(commit, n, e, other)).toBe(false);
+    expect(await checkPairingCommitment(commit, e, n, nN)).toBe(false);
+    expect(await checkPairingCommitment("***", n, e, nN)).toBe(false);
+    expect(await pairingSas(n, e, nN, other)).not.toBe(sas);
+    await expect(pairingSas(n, e, new Uint8Array(15), nE)).rejects.toThrow("16 bytes");
+    await expect(pairingCommitment(n, new Uint8Array(65), nN)).rejects.toThrow("public key");
+    // fixed vector made by 0.8.0
+    const s = v8.sas;
+    const [vn, ve, vnn, vne] = [s.newPublic, s.existingPublic, s.newNonce, s.existingNonce].map(fromBase64) as [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
+    expect(await pairingCommitment(vn, ve, vnn)).toBe(s.commitment);
+    expect(await pairingSas(vn, ve, vnn, vne)).toBe(s.sas);
   });
 
   it("pairing code: 6 digits, the same on both devices, different for another key", async () => {
