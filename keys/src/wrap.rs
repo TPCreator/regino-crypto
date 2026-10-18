@@ -3,6 +3,11 @@
 //! Format: `magic(4) | nonce(24) | ciphertext + tag(16)`.
 //! `context` (e.g. `demo/client/01J…`) is authenticated but not stored – so the wrapped key of one
 //! client cannot be passed off as the key of another.
+//!
+//! AAD = `magic || context`. The magic has a fixed length and the context is the only variable
+//! field, so no length prefix is needed: different contexts always give different AAD (question 2 in
+//! AUDIT.md). The caller must build the context itself unambiguously, e.g. `<app>/client/<id>` with
+//! ids that cannot contain the separator.
 
 use crate::{Error, Key, KEY_LEN};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};

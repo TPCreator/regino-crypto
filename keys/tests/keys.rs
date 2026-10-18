@@ -52,6 +52,60 @@ fn discarding_client_key_shreds_data() {
     assert_eq!(wrap::open(&master, &note, b"note/1").unwrap_err(), Error::Decrypt);
 }
 
+/// A "backup" as an app makes it: the master key's material (from the recovery phrase) opens the
+/// wrapped client keys it contains. Issue #3 / question 16: a backup made *before* the client was
+/// deleted still opens the client's records; a backup made *after* does not. Deleting a client is
+/// therefore crypto-shredding only together with deleting (or re-creating) the older backups.
+#[test]
+fn shredding_reaches_only_backups_made_after_deletion() {
+    struct Backup {
+        wrapped_clients: Vec<(Vec<u8>, Vec<u8>)>, // (context, wrapped key)
+        sealed: Vec<(Vec<u8>, Vec<u8>)>,          // (context, sealed record)
+    }
+    fn open_all(master: &Key, b: &Backup) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for (ctx, w) in &b.wrapped_clients {
+            let k = wrap::unwrap_key(master, w, ctx).unwrap();
+            for (rctx, r) in &b.sealed {
+                if let Ok(plain) = wrap::open(&k, r, rctx) {
+                    out.push(plain.to_vec());
+                }
+            }
+        }
+        out
+    }
+    let master = Key::generate().unwrap();
+    let client = Key::generate().unwrap();
+    let wrapped = wrap::wrap_key(&master, &client, b"app/client/1").unwrap();
+    let record = wrap::seal(&client, b"session note", b"app/note/1").unwrap();
+    let before = Backup { wrapped_clients: vec![(b"app/client/1".to_vec(), wrapped)], sealed: vec![(b"app/note/1".to_vec(), record.clone())] };
+    // the client is deleted: the wrapped key is discarded, the sealed record may still linger
+    let after = Backup { wrapped_clients: vec![], sealed: vec![(b"app/note/1".to_vec(), record)] };
+    assert_eq!(open_all(&master, &before), vec![b"session note".to_vec()]);
+    assert!(open_all(&master, &after).is_empty());
+}
+
+/// Question 2: the AAD is `magic(4) || context`. The magic has a fixed length and the context is the
+/// only variable field, so the map context -> AAD is injective and a blob cannot be moved between
+/// the two magics or between contexts, even contexts that are prefixes of each other.
+#[test]
+fn aad_binds_magic_and_whole_context() {
+    let k = Key::generate().unwrap();
+    let inner = Key::generate().unwrap();
+    let w = wrap::wrap_key(&k, &inner, b"app/client/1").unwrap();
+    for ctx in [&b"app/client/"[..], b"app/client/10", b"app/client/1\0", b"", b"RGW1app/client/1"] {
+        assert_eq!(wrap::unwrap_key(&k, &w, ctx).unwrap_err(), Error::Decrypt);
+    }
+    // the same bytes relabelled as a sealed blob (RGS1) do not open: the magic is in the AAD
+    let mut relabelled = w.clone();
+    relabelled[..4].copy_from_slice(b"RGS1");
+    assert_eq!(wrap::open(&k, &relabelled, b"app/client/1").unwrap_err(), Error::Decrypt);
+    let s = wrap::seal(&k, inner.as_bytes(), b"app/client/1").unwrap();
+    let mut as_wrap = s.clone();
+    as_wrap[..4].copy_from_slice(b"RGW1");
+    assert_eq!(wrap::unwrap_key(&k, &as_wrap, b"app/client/1").unwrap_err(), Error::Decrypt);
+}
+
 #[test]
 fn any_two_of_three_shares_suffice() {
     let key = Key::generate().unwrap();
