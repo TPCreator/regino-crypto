@@ -9,7 +9,7 @@ Severities are ours. A formal auditor should treat these as known and start from
 | # | Severity | Where | Finding | Status |
 |---|---|---|---|---|
 | 1 | High | `ts/src/sync.ts` `pairingCode` | 6-digit code over the new device's key alone is forgeable by whoever carries the key | **mitigated**: the app scans the key from the QR code directly, the server never carries it; requirement written down in `docs/PAIRING.md` |
-| 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | open – protocol, documented |
+| 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | **open in the app** (Dôverník uses no fingerprint yet; plan: the app checks the published key, fingerprint in the app and on paper); core docs corrected, requirements in `docs/INBOX.md` |
 | 3 | High | `ts/src/sync.ts` `unwrapForDevice` | ephemeral public key and plaintext length not validated | **fixed** |
 | 4 | High | README, `keys/src/lib.rs`, `keys/tests/keys.rs` | "unreadable in all backups too" is false for backups made before the key was discarded; the test only checks a wrong key | docs **fixed**, test and app behaviour open |
 | 5 | Medium | `ts/src/sync.ts` `wrapForDevice` | AAD is the bare context, records use `sync record v1\|context` | open – next format version |
@@ -68,9 +68,15 @@ page shows with a fingerprint obtained from the practice out of band.
 - Longer term: pin the key in the client's browser after the first visit, or deliver the key inside a
   practice-signed object (`signed.ts` already verifies Ed25519 certificates).
 
-**Done now:** threat model row rewritten, `inbox.ts` comments corrected, README wording corrected,
-question 14 extended. **Open:** `docs/INBOX.md` describing key delivery and the fingerprint flow, and
-the sender-side UI in the private web repository.
+**Status:** the only app using the inbox (Dôverník) confirmed that `inboxFingerprint` is not used
+anywhere yet: the client sees no fingerprint, the practice prints none, and the app does not compare
+the published key with its own. The form script and the key come from the same server, so today a
+sender trusts that server completely. Threat model row rewritten, `inbox.ts` comments and README
+corrected, question 14 extended, and the requirements for the app and the web page are written down
+in [`docs/INBOX.md`](../docs/INBOX.md). **Open in the app:** (a) the app verifies the published key
+after publishing and on every download, (b) fingerprint shown in the app and on printed material,
+(c) the form shows the fingerprint of the key it uses, (d) SRI or a separate static origin for the
+form script. Tracked in the Dôverník repository; here the item stays open until (a)–(c) exist.
 
 ## 3. `unwrapForDevice` did not validate the ephemeral key or the result (High, fixed)
 

@@ -27,7 +27,7 @@ can verify our claims.
 | `vault/` (`regino-vault`) | Rust | `lib.rs`, `keystore.rs`, `backups.rs` | encrypted local SQLite (SQLCipher), DB key in the OS keystore, backup file writing |
 | `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`) | `backup.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts`, `sync.ts`, `inbox.ts`, `ecdh.ts` (shared by sync and inbox) | encrypted backups, recovery phrase (12/24 Slovak words, QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates, sync between devices (sealed records, per-device wrapped group key, pairing code), inbox (anonymous senders seal data to a recipient's public key) |
 | `tools/open-backup.html` | built from `ts/tools/` | | public offline tool that opens any backup with the recovery phrase |
-| `docs/PAIRING.md` | documentation | | how an app must pair a device around `sync.ts` (the public key travels by QR code, not through the server) – the protocol the auditor should read with the code |
+| `docs/PAIRING.md`, `docs/INBOX.md` | documentation | | how an app must pair a device around `sync.ts` (the public key travels by QR code, not through the server) and how a practice publishes its inbox key and fingerprint around `inbox.ts` – the protocols the auditor should read with the code |
 
 Size: about 1 400 lines of non-test code. The commit to review is fixed when the engagement starts
 (apps pin the core to a commit; see `Cargo.toml` / `package.json` of the apps).
@@ -95,8 +95,8 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
     is 6 digits from SHA-256 (slight modulo bias). Is the context binding (`sync record v1|…` as AAD)
     sufficient against moving records between groups, tables or ids?
 
-14. `inbox.ts`: anonymous sealing to a recipient's P-256 key (ECIES-like, ephemeral key per
-    message). Is the HKDF salt/info and the context as AAD sufficient? The private key is exported as
+14. `inbox.ts` (and `docs/INBOX.md`): anonymous sealing to a recipient's P-256 key (ECIES-like,
+    ephemeral key per message). Is the HKDF salt/info and the context as AAD sufficient? The private key is exported as
     PKCS#8 so all devices of a practice can use it – the app keeps it wrapped by its own keys; any
     weakness in that? The page code comes from our server, so a compromised server could serve code
     that leaks form data before sealing – what mitigations do you recommend (SRI, a separate static
