@@ -2,7 +2,7 @@
 
 *Contact and vulnerability reporting: [SECURITY.md](SECURITY.md).*
 
-**Brief for version 0.6.0 (17 October 2026, updated 18 October 2026).** Proposed commit for the
+**Brief for version 0.7.0 (18 October 2026).** Proposed commit for the
 review: a signed tag `audit-<date>` on `main`, created when the engagement starts (so that line
 references in the report stay verifiable). Known findings from a pre-audit review, with their status,
 are listed in [`audits/`](audits/) – please do not spend time re-discovering them. Changes since the
@@ -13,6 +13,7 @@ first draft of this brief:
 | 0.4.0 | verification of signed licence tokens and key certificates (Ed25519) | `ts/src/signed.ts` |
 | 0.5.0 | sync between devices: sealed records, group key wrapped per device (ECDH P-256), pairing code | `ts/src/sync.ts` |
 | 0.6.0 | inbox: people without an account (a web form, a document signed in the browser) seal data to a recipient's public key | `ts/src/inbox.ts` |
+| 0.7.0 | pre-audit review: `unwrapForDevice` validates the ephemeral key and the result; corrected claims; `docs/PAIRING.md`, `docs/INBOX.md`; findings and status in `audits/` | `ts/src/sync.ts`, `docs/`, `audits/` |
 
 This document scopes an independent security review of **regino-crypto**, an encryption core
 shared by several offline-first apps that store sensitive personal data – including

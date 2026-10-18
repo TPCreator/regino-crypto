@@ -1,22 +1,22 @@
 # Pre-audit review, October 2026 – findings and status
 
 An informal review of `v0.6.0` (no written report) before a paid independent audit. The list below is
-our record of the findings, re-verified against the code, with what we changed. Each open item is
-meant to become a GitHub issue labelled `pre-audit-review`; the texts below are the issue drafts.
+our record of the findings, re-verified against the code, with what we changed. Open items are
+GitHub issues labelled `pre-audit-review`: [#2](https://github.com/TPCreator/regino-crypto/issues/2) (finding 2), [#3](https://github.com/TPCreator/regino-crypto/issues/3) (finding 4), [#4](https://github.com/TPCreator/regino-crypto/issues/4) (findings 5 and 7), [#5](https://github.com/TPCreator/regino-crypto/issues/5) (finding 9).
 Severities are ours. A formal auditor should treat these as known and start from question 15–17 in
 [AUDIT.md](../AUDIT.md) for the open ones.
 
 | # | Severity | Where | Finding | Status |
 |---|---|---|---|---|
 | 1 | High | `ts/src/sync.ts` `pairingCode` | 6-digit code over the new device's key alone is forgeable by whoever carries the key | **mitigated**: the app scans the key from the QR code directly, the server never carries it; requirement written down in `docs/PAIRING.md` |
-| 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | **open in the app** (Dôverník uses no fingerprint yet; plan: the app checks the published key, fingerprint in the app and on paper); core docs corrected, requirements in `docs/INBOX.md` |
+| 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | **open in the app** (Dôverník uses no fingerprint yet; plan: the app checks the published key, fingerprint in the app and on paper); core docs corrected, requirements in `docs/INBOX.md`; issue #2 |
 | 3 | High | `ts/src/sync.ts` `unwrapForDevice` | ephemeral public key and plaintext length not validated | **fixed** |
-| 4 | High | README, `keys/src/lib.rs`, `keys/tests/keys.rs` | "unreadable in all backups too" is false for backups made before the key was discarded; the test only checks a wrong key | docs **fixed**, test and app behaviour open |
-| 5 | Medium | `ts/src/sync.ts` `wrapForDevice` | AAD is the bare context, records use `sync record v1\|context` | open – next format version |
+| 4 | High | README, `keys/src/lib.rs`, `keys/tests/keys.rs` | "unreadable in all backups too" is false for backups made before the key was discarded; the test only checks a wrong key | docs **fixed**, test and app behaviour open; issue #3 |
+| 5 | Medium | `ts/src/sync.ts` `wrapForDevice` | AAD is the bare context, records use `sync record v1\|context` | open – next format version; issue #4 |
 | 6 | Medium | `ts/src/sync.ts` `recordKey` | HKDF with a zero salt for the record key | open – question 13 for the auditor |
-| 7 | Low | `ts/src/sync.ts` `pairingCode` | modulo bias of the 6-digit code | open – subsumed by 1 |
+| 7 | Low | `ts/src/sync.ts` `pairingCode` | modulo bias of the 6-digit code | open – fix with 5; issue #4 |
 | 8 | Low | `ts/src/inbox.ts` `newInboxKeys` | the inbox private key is exported as PKCS#8 and lives wrapped in every device of a practice | open – question 14 for the auditor |
-| 9 | Low | README, AUDIT.md | "100 % coverage" is true for TypeScript only, Rust coverage is not measured | docs **fixed**, measurement open |
+| 9 | Low | README, AUDIT.md | "100 % coverage" is true for TypeScript only, Rust coverage is not measured | docs **fixed**, measurement open; issue #5 |
 | 10 | Low | `.github/workflows/*` | `npm install` instead of `npm ci`, `cargo` without `--locked`, release build and upload in one job with a write token | **fixed** |
 
 Not findings but clarified in the same review and now recorded in AUDIT.md: the frozen commit for
