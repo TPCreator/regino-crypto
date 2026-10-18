@@ -4,7 +4,7 @@
 
 1. **Preferred:** the **Security › Report a vulnerability** tab of this repository (GitHub private
    vulnerability reporting). You get a private thread with us and a CVE can be requested from there.
-2. **Fallback** (no GitHub account, or the tab is unavailable): e-mail **SECURITY-CONTACT** with the
+2. **Fallback** (no GitHub account, or the tab is unavailable): e-mail **security@regino.sk** with the
    subject "regino-crypto security". If you need encryption, ask for a key in a first message.
 
 We confirm receipt within **5 business days** and give a first assessment within **10 business days**.
