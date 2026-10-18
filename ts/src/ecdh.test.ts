@@ -40,3 +40,35 @@ describe("equalBytes", () => {
     expect(equalBytes(new Uint8Array(0), new Uint8Array(0))).toBe(true);
   });
 });
+
+describe("gcmNonce and checkContext", () => {
+  it("only 12-byte nonces and non-empty contexts", async () => {
+    const { gcmNonce, checkContext } = await import("./ecdh");
+    expect(gcmNonce(b64(new Uint8Array(12)))).toHaveLength(12);
+    for (const n of [0, 8, 13, 16]) expect(() => gcmNonce(b64(new Uint8Array(n)))).toThrow("12 bytes");
+    expect(() => checkContext("", "sync")).toThrow("sync context");
+    expect(() => checkContext(5 as unknown as string, "sync")).toThrow("must not be empty");
+    expect(() => checkContext("g|x", "sync")).not.toThrow();
+  });
+
+  it("sealed data with a nonce of another length is refused everywhere", async () => {
+    const { newGroupKey, recordKey, sealRecord, openRecord, newDeviceKeys, publicKeyBytes, wrapForDevice } = await import("./sync");
+    const { newInboxKeys, sealToInbox } = await import("./inbox");
+    const n16 = b64(new Uint8Array(16));
+    const key = await recordKey(newGroupKey());
+    const rec = await sealRecord(key, "g|t|1", { a: 1 });
+    await expect(openRecord(key, "g|t|1", { ...rec, n: n16 })).rejects.toThrow("cannot be opened");
+    await expect(sealRecord(key, "", 1)).rejects.toThrow("context");
+    await expect(openRecord(key, "", rec)).rejects.toThrow("context");
+    const dev = await newDeviceKeys();
+    const pub = await publicKeyBytes(dev.publicKey);
+    const w = await wrapForDevice(newGroupKey(), pub, "g|device|d");
+    await expect(unwrapForDevice({ ...w, n: n16 }, dev.privateKey, pub, "g|device|d")).rejects.toThrow("cannot be unwrapped");
+    await expect(wrapForDevice(newGroupKey(), pub, "")).rejects.toThrow("context");
+    await expect(unwrapForDevice(w, dev.privateKey, pub, "")).rejects.toThrow("context");
+    const inbox = await newInboxKeys();
+    const msg = await sealToInbox(inbox.publicKey, "c", new Uint8Array([1]));
+    const k = await importInboxKey(inbox.privateKey);
+    await expect(openFromInbox(k, "c", { ...msg, n: n16 })).rejects.toThrow();
+  });
+});

@@ -21,6 +21,18 @@ export function unb64(text: string): Uint8Array {
   return out;
 }
 
+/** AES-GCM nonce from base64; throws unless it has exactly 96 bits (12 bytes), as the formats specify. */
+export function gcmNonce(text: string): Uint8Array {
+  const n = unb64(text);
+  if (n.length !== 12) throw new Error("The nonce must have 12 bytes.");
+  return n;
+}
+
+/** Contexts bind data to its purpose; an empty one binds nothing and is refused. */
+export function checkContext(context: string, what: string): void {
+  if (typeof context !== "string" || context === "") throw new Error(`The ${what} context must not be empty.`);
+}
+
 /** Throws unless the key is an uncompressed P-256 point (65 bytes, 0x04 ‖ x ‖ y). */
 export function checkP256Point(key: Uint8Array, what: string): void {
   if (!(key instanceof Uint8Array) || key.length !== 65 || key[0] !== 4)

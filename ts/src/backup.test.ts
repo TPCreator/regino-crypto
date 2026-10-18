@@ -104,4 +104,14 @@ describe('encrypted backup', () => {
     expect((await decryptBackup(long, a, APP)).ok).toBe(true);
     expect((await decryptBackup(short, b, APP)).ok).toBe(true);
   });
+
+  it('header fields must be strings, salt 16 bytes and nonce 12 bytes', async () => {
+    const secret = newRecoverySecret();
+    const file = await encryptBackup(secret, data, '2026-10-18T10:00:00.000Z', APP);
+    for (const field of ['salt', 'nonce', 'createdAt', 'ciphertext'] as const)
+      expect(await decryptBackup(secret, { ...file, [field]: 5 }, APP)).toEqual({ ok: false, error: 'not-backup' });
+    const b = (n: number) => btoa(String.fromCharCode(...new Uint8Array(n)));
+    expect(await decryptBackup(secret, { ...file, salt: b(15) }, APP)).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
+    expect(await decryptBackup(secret, { ...file, nonce: b(16) }, APP)).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
+  });
 });

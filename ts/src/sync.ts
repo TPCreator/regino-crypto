@@ -16,7 +16,7 @@
  *   (`pairingCommitment`, `pairingSas`), which a party in the middle cannot grind.
  */
 import { equalBytes, sixDigits } from "./bytes";
-import { b64, checkP256Point, ECDH, sealingKey, unb64 } from "./ecdh";
+import { b64, checkContext, checkP256Point, ECDH, gcmNonce, sealingKey, unb64 } from "./ecdh";
 
 /** Version of sealed records. */
 export const SYNC_VERSION = 1;
@@ -78,6 +78,7 @@ export async function sealRecord(
   context: string,
   payload: unknown,
 ): Promise<SealedRecord> {
+  checkContext(context, "sync");
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const c = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: nonce, additionalData: recordAad(context) },
@@ -95,11 +96,12 @@ export async function openRecord<T = unknown>(
 ): Promise<T> {
   if (!sealed || sealed.v !== SYNC_VERSION)
     throw new Error("Unsupported sync record version.");
+  checkContext(context, "sync");
   try {
     const plain = await crypto.subtle.decrypt(
       {
         name: "AES-GCM",
-        iv: unb64(sealed.n) as BufferSource,
+        iv: gcmNonce(sealed.n) as BufferSource,
         additionalData: recordAad(context),
       },
       key,
@@ -147,6 +149,7 @@ export async function wrapForDevice(
 ): Promise<WrappedGroupKey> {
   checkGroupKey(groupKey);
   checkPublicKey(devicePublic);
+  checkContext(context, "sync");
   const eph = (await crypto.subtle.generateKey(ECDH, false, [
     "deriveBits",
   ])) as CryptoKeyPair;
@@ -177,6 +180,7 @@ export async function unwrapForDevice(
     throw new Error("Unsupported wrapped key version.");
   const v = wrapped.v;
   checkPublicKey(devicePublic);
+  checkContext(context, "sync");
   try {
     const ephPublic = unb64(wrapped.e);
     checkPublicKey(ephPublic);
@@ -184,7 +188,7 @@ export async function unwrapForDevice(
     const plain = await crypto.subtle.decrypt(
       {
         name: "AES-GCM",
-        iv: unb64(wrapped.n) as BufferSource,
+        iv: gcmNonce(wrapped.n) as BufferSource,
         additionalData: wrapAad(v, context),
       },
       key,
