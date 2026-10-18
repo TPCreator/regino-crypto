@@ -1,4 +1,4 @@
-use regino_vault::{keystore, Error, Vault};
+use regino_vault::{keystore, Error, Key, Vault};
 
 // In-memory mock keystore instead of Windows Credential Manager. Set up once for all tests
 // (they run in parallel; each uses its own entry).
@@ -52,4 +52,17 @@ fn corrupted_key_in_keystore_is_an_error() {
         keystore::load_or_create_key("regino-crypto.test", "db-test-4"),
         Err(Error::KeyStore(_))
     ));
+}
+
+#[test]
+fn to_hex_is_lowercase_and_round_trips() {
+    let mut b = zeroize::Zeroizing::new([0u8; regino_vault::KEY_LEN]);
+    for (i, x) in b.iter_mut().enumerate() {
+        *x = (i as u8).wrapping_mul(37).wrapping_add(0xa5);
+    }
+    let k = Key::from_bytes(b);
+    let hex = k.to_hex();
+    assert_eq!(hex.len(), 64);
+    assert!(hex.starts_with("a5ca"), "{}", hex.as_str());
+    assert_eq!(Key::from_hex(&hex).unwrap().as_bytes(), k.as_bytes());
 }

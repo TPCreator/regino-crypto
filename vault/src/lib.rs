@@ -47,8 +47,16 @@ impl Key {
         Ok(Key(bytes))
     }
 
+    /// Hex for `PRAGMA key`: written straight into one pre-sized `Zeroizing` string – no temporary
+    /// per-byte strings and no reallocation that would leave unwiped copies of the key behind.
     pub fn to_hex(&self) -> Zeroizing<String> {
-        Zeroizing::new(self.0.iter().map(|b| format!("{b:02x}")).collect())
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = Zeroizing::new(String::with_capacity(KEY_LEN * 2));
+        for b in self.0.iter() {
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0f) as usize] as char);
+        }
+        out
     }
 }
 
@@ -81,7 +89,7 @@ impl Vault {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        let pragma = Zeroizing::new(format!("PRAGMA key = \"x'{}'\";", key.to_hex().as_str()));
+        let pragma = key_pragma("key", key);
         conn.execute_batch(&pragma)?;
         // Key check: with a wrong key SQLCipher reports "file is not a database".
         if conn
@@ -130,10 +138,21 @@ impl Vault {
 
     /// Changes the key (e.g. after enabling a PIN or during recovery); the whole file is re-encrypted.
     pub fn rekey(&self, key: &Key) -> Result<(), Error> {
-        let pragma = Zeroizing::new(format!("PRAGMA rekey = \"x'{}'\";", key.to_hex().as_str()));
+        let pragma = key_pragma("rekey", key);
         self.conn.execute_batch(&pragma)?;
         Ok(())
     }
+}
+
+/// `PRAGMA key|rekey = "x'<hex>'";` built in one pre-sized `Zeroizing` string (no reallocation copies).
+fn key_pragma(name: &str, key: &Key) -> Zeroizing<String> {
+    let mut p = Zeroizing::new(String::with_capacity(32 + KEY_LEN * 2));
+    p.push_str("PRAGMA ");
+    p.push_str(name);
+    p.push_str(" = \"x'");
+    p.push_str(key.to_hex().as_str());
+    p.push_str("'\";");
+    p
 }
 
 fn to_sql(params: &[Value]) -> Result<Vec<rusqlite::types::Value>, Error> {
