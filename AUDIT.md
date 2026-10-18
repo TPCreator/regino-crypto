@@ -75,7 +75,7 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
 
 ## 4. Questions we would like answered
 
-1. `Key::eq` in `keys/src/lib.rs` compares with an OR-fold. Is that constant-time enough, or should we use `subtle`?
+1. `Key::eq` in `keys/src/lib.rs` uses `subtle::ConstantTimeEq` (since 0.7.0; before, a hand-written OR-fold). Are there other comparisons of secrets or tags in the code that should be constant-time?
 2. AAD in `wrap.rs` is `magic ‖ context` without a length prefix. Any ambiguity risk across callers?
 3. HKDF without salt for the recovery key (IKM is uniformly random) – acceptable?
 4. Is a 128-bit recovery secret (12 words) an adequate default for backups that may sit in cloud storage for years? (24 words remain available.)

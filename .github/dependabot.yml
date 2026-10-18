@@ -1,0 +1,19 @@
+# Keeps the pinned GitHub Actions (commit hashes), npm and Cargo dependencies current.
+# Pull requests are opened once a week; CI (tests, cargo-deny, npm audit) must pass before merging.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    commit-message: { prefix: "ci" }
+  - package-ecosystem: npm
+    directory: /ts
+    schedule: { interval: weekly }
+    commit-message: { prefix: "ts" }
+    groups:
+      dev-dependencies:
+        dependency-type: development
+  - package-ecosystem: cargo
+    directory: /
+    schedule: { interval: weekly }
+    commit-message: { prefix: "rust" }

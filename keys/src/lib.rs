@@ -9,6 +9,7 @@
 //! is unreadable – in the database and in every backup made after the key was discarded.
 //! A backup made before still carries the wrapped key; the app must handle such backups.
 
+use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 pub mod kdf;
@@ -39,9 +40,9 @@ impl Key {
 }
 
 impl PartialEq for Key {
-    /// Constant-time comparison.
+    /// Constant-time comparison (`subtle`), so a wrong key is not revealed byte by byte through timing.
     fn eq(&self, other: &Self) -> bool {
-        self.0.iter().zip(other.0.iter()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+        self.0.as_ref().ct_eq(other.0.as_ref()).into()
     }
 }
 
