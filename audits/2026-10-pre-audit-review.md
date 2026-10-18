@@ -26,7 +26,7 @@ in scope as far as this repository documents it.
 
 ---
 
-## 1. Pairing code is forgeable by the party carrying the key (High, open)
+## 1. Pairing code is forgeable by the party carrying the key (High, mitigated)
 
 **Where:** `ts/src/sync.ts`, `pairingCode(devicePublic)`; docs in `sync.ts` header and AUDIT.md.
 
@@ -51,7 +51,7 @@ pairing"), question 15, and the requirement for apps is now in [`docs/PAIRING.md
 The function is unchanged. **Open for the auditor:** whether QR transport plus the 6-digit
 confirmation is enough; a SAS over both keys only if an app ever moves the key through the server.
 
-## 2. Inbox fingerprint does not protect the sender (High, open)
+## 2. Inbox fingerprint does not protect the sender (High, fixed in the app)
 
 **Where:** `ts/src/inbox.ts`, `inboxFingerprint`; AUDIT.md threat model row "server in the middle".
 
@@ -104,7 +104,7 @@ must be exactly 32 bytes; otherwise "The group key cannot be unwrapped on this d
 33-byte key, a compressed point and a correctly sealed 16-byte plaintext. Question 17 asks the
 auditor whether the wrapped-key AAD should also carry a version label (see 5).
 
-## 4. Crypto-shredding claim ignored existing backups (High, docs fixed)
+## 4. Crypto-shredding claim ignored existing backups (High, fixed in 0.8.0)
 
 **Where:** README "How it fits together", `keys/src/lib.rs` module docs, test
 `discarding_client_key_shreds_data` in `keys/tests/keys.rs`.
@@ -121,7 +121,12 @@ sealed with the client key directly, which is a property of AEAD, not of deletio
   cloud copies made earlier still contain the data;
 - consider a per-backup key epoch in the core if the auditor thinks it is worth it.
 
-## 5. Wrapped-key AAD has no version label (Medium, open)
+**Done in 0.8.0:** the Rust test `shredding_reaches_only_backups_made_after_deletion`;
+`regino_vault::backups::discard_backups_before` for the apps; decision not to add a key epoch (a
+backup must open with the recovery phrase alone – AUDIT.md question 16). The app part (calling it
+after deleting a client, telling the user about copies elsewhere) is tracked in the apps.
+
+## 5. Wrapped-key AAD has no version label (Medium, fixed in 0.8.0)
 
 **Where:** `ts/src/sync.ts`, `wrapForDevice` / `unwrapForDevice`: `additionalData: enc.encode(context)`.
 
@@ -132,23 +137,27 @@ future format that reuses a context string would have no version separation.
 **Fix:** with the next `SYNC_VERSION` use `sync wrap v2|<context>` as AAD (the HKDF info already
 carries `sync wrap v1|`). Keep accepting v1 blobs. Tracked as question 17.
 
-## 6. Zero HKDF salt for the record key (Medium, open question)
+**Done in 0.8.0:** `WRAP_VERSION = 2`, `sync wrap v2|<context>` as HKDF info and AAD; v1 blobs still unwrap (fixed 0.6.0 vector); new fixed v2 vector.
+
+## 6. Zero HKDF salt for the record key (Medium, question for the auditor)
 
 Already question 13 in AUDIT.md. The group key is uniformly random, so a zero salt is the RFC 5869
 "salt not provided" case. Left for the auditor; no change.
 
-## 7. Modulo bias in the pairing code (Low, open)
+## 7. Modulo bias in the pairing code (Low, fixed in 0.8.0)
 
 `(h[0..3] as 24-bit integer) % 1_000_000` is slightly biased. Irrelevant next to finding 1; fix
 together with it (rejection sampling or 32 bits).
 
-## 8. Inbox private key as PKCS#8 on every device (Low, open question)
+**Done in 0.8.0:** rejection sampling over 32-bit words of the hash (`sixDigits`), label `sync pairing v2`.
+
+## 8. Inbox private key as PKCS#8 on every device (Low, question for the auditor)
 
 By design: all devices of a practice must open messages, so the key is exported once and kept wrapped
 by the app's keys. Question 14. No change; a hardware-backed or per-device inbox key would be an
 app-level redesign.
 
-## 9. Coverage claim (Low, docs fixed)
+## 9. Coverage claim (Low, docs fixed, measurement open)
 
 "100 % coverage" is enforced by `vitest` for `ts/src` only. README and AUDIT.md now say so.
 **Open:** add `cargo llvm-cov` to CI for `keys/` and `vault/` and publish the number.
@@ -178,5 +187,11 @@ Before the paid audit we answered our own 17 questions (AUDIT.md section 4) on t
   Q7 encrypted WAL and `rekey` in WAL mode, Q8 separation of 16- and 32-byte backup secrets, Q11 tool
   integrity (CI + `SHA256SUMS.txt`).
 - **For the auditor (our view written down):** Q3, Q5, Q12, Q14, findings 6 and 8 (part of Q13/Q14).
+
+After an independent review of `33c6695` (2026-10-18), also fixed on the same branch: revoked kids in
+key lists (a real bug – another entry with the same kid brought a revoked key back), 12-byte GCM
+nonces and typed backup headers, empty contexts refused in `sync.ts` and `wrap.rs`, Shamir without
+unwiped key copies and with conflicting shares refused, block base64 in backups, NaN/±Inf refused
+when reading from the vault; AUDIT.md gained the key hierarchy (3.1) and context rules (3.2).
 
 Open from this list: finding 9 (Rust coverage measurement, issue #5).

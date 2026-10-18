@@ -77,31 +77,89 @@ side channels on the user's own device beyond what the libraries provide.
 Randomness: OS CSPRNG (`getrandom`, `crypto.getRandomValues`). Rust secrets use `zeroize`;
 JavaScript cannot reliably wipe memory. No home-grown primitives.
 
+### 3.1 Key hierarchy and what the apps put into each format
+
+```
+Rust (regino-keys), e.g. Dôverník – keys/ and the app's key file
+  password ──Argon2id──► password KEK ──┐ RGW1 "dovernik/master/password"
+  recovery secret ─HKDF (recovery_key)──┼─► MASTER KEY ── RGW1 "dovernik/client/<id>" ──► client key ── RGS1 "dovernik/<kind>/<client>/<record>" ──► record
+   (16/32 B, 12/24 words)   RGW1 "…/master/recovery"   │                                              (one key per client; delete = discard the RGW1 blob)
+                                                       ├─ RGW1 "dovernik/db" ──► SQLCipher DB key (also kept in the OS keystore)
+                                                       └─ RGS1 "dovernik/recovery-secret" ──► recovery secret (so the app can back up without asking for the words)
+
+regino-vault: SQLCipher key – 32 random bytes, stored in the OS keystore (Windows Credential Manager); the app may also keep it wrapped as above.
+
+ts/ backup.ts – NOT through the master key:
+  recovery secret ──HKDF-SHA256(salt 16 B random, info "<app> backup v1[ k128]")──► AES-256-GCM key ──► backup file
+
+ts/ sync.ts (Gazda):
+  group key (32 B random) ──HKDF "sync records v1"──► record key ──AES-GCM, AAD "sync record v1|<context>"──► sealed record
+  group key ──ECDH P-256 + HKDF "sync wrap v2|<context>"──► wrapped for each device
+
+ts/ inbox.ts (Dôverník forms): sender ──ephemeral ECDH P-256 + HKDF "inbox seal v1|<context>"──► message to the practice's inbox key
+  (the inbox private key is kept sealed by the app's master key)
+```
+
+**Payloads in the apps today** (needed to judge question 16):
+
+| App | `encryptBackup` payload | `sealRecord` payload |
+|---|---|---|
+| Dôverník (core 0.6.0) | `PracticeData` as **plain JSON**: settings, clients, appointments, invoices, **notes decrypted to text**, the activity log, and the inbox private key (PKCS#8, base64). No RGS1/RGW1 blobs: the backup is protected only by the backup key from the recovery secret. Locally the notes are RGS1 blobs under per-client keys. | not used |
+| Gazda (core 0.5.0) | all tables as **plain JSON**, device-only settings (sync group key, device keys) left out | a `SyncEvent` as plain JSON (table, primary key, operation, row) |
+
+So in both apps a backup made before a client was deleted contains that client's data in plain JSON
+under the backup key; deleting the client reaches only later backups – hence
+`discard_backups_before` and the app's duty to say that copies elsewhere still contain the client.
+
+### 3.2 Contexts (domain separation)
+
+Every sealed or wrapped object is bound to a context string (AAD, and HKDF info where a key is
+derived). Rules for apps:
+
+1. **Never empty** – refused by the core (`Error::EmptyContext`, `checkContext`).
+2. **Fields joined by one fixed separator per format:** `/` for regino-keys blobs (`RGW1`/`RGS1`), `|`
+   for the TypeScript formats (sync, inbox). Both conventions stay because existing data depends on
+   them; the core adds its own label (`RGW1`, `RGS1`, `sync record v1|`, `sync wrap v2|`,
+   `inbox message v1|`), so the two families never meet.
+3. **No field may contain the separator.** Ids are ULIDs or base64url (`[A-Za-z0-9_-]`); the app
+   validates them before building a context (Dôverník: `check_id` in `crates/core/src/records.rs`).
+4. **Fixed shape per purpose:** the first field names the app or the group, the second the purpose
+   (`client`, `note`, `event`, `device`, `request`, …), then a fixed number of ids. Two purposes never
+   share a shape, e.g. `dovernik/client/<id>` vs. `dovernik/<kind>/<client>/<record>`.
+5. If a field could ever contain arbitrary text, the app must length-prefix it instead (none does today).
+
 ## 4. Our answers – please verify
 
-Status: **fixed** (code changed, with tests), **decided** (our design decision, implemented),
-**verified** (we checked it and added a test; please confirm), **for the auditor** (our view; we
-would like your opinion). Test names are in `keys/tests/`, `vault/tests/` and `ts/src/*.test.ts`.
+Two parts. **4.1** are questions we answered ourselves; please only confirm. **4.2** are the
+questions we would like your opinion on; each says what we did and what we think. Status: **fixed**
+(code changed, with tests), **decided** (our design decision, implemented), **verified** (checked,
+with a test). Question numbers are kept from earlier versions of this brief; tests are in
+`keys/tests/`, `vault/tests/` and `ts/src/*.test.ts`.
+
+### 4.1 Our answer – please only confirm
 
 | # | Question | Our answer | Status |
 |---|---|---|---|
-| 1 | Other comparisons of secrets or tags that should be constant-time? | `Key::eq` (since 0.7.0) and the Shamir key fingerprint check (`shamir::combine`) use `subtle::ConstantTimeEq`; in TypeScript the PIN hash, the recovery checksum and the QR check bytes go through `equalBytes` (no early exit). AEAD tags are checked inside RustCrypto and WebCrypto. The remaining comparisons are on public data: magic bytes, thresholds, the share fingerprint (stored in every share), lengths. | fixed – please check we missed nothing |
-| 2 | AAD in `wrap.rs` is `magic ‖ context` without a length prefix – ambiguity? | No: the magic has a fixed length (4 B) and the context is the only variable field, so different contexts always give different AAD and a blob cannot move between `RGW1`/`RGS1` or between contexts, even prefixes of each other (`aad_binds_magic_and_whole_context`). A length prefix would add a format version without a security gain, so the format stays `RGW1`/`RGS1`. The caller builds the context unambiguously (documented in `wrap.rs`). | verified |
-| 3 | HKDF without salt for the recovery key | The IKM is a uniformly random 128- or 256-bit secret, so HKDF-Extract with the default (zero) salt is the RFC 5869 §3.1 case "salt not available"; the app name and the secret length are in `info`, so keys of different apps and lengths are separated. | for the auditor |
-| 4 | Is 128 bits (12 words) an adequate default for backups kept for years? | **Decided: 12 words stay the default.** 128-bit random IKM through HKDF-SHA256 to an AES-256 key gives 128-bit classical security; a quantum search (Grover) would still need about 2^64 sequential evaluations of HKDF + AES-GCM, which we consider out of reach for the lifetime of the data (it is NIST post-quantum category 1, the AES-128 level). 24 words stay available (`newRecoverySecret(24)`) for apps or users who want a margin; the app chooses. | decided |
-| 5 | 64-bit Shamir fingerprint as a verifier of a 256-bit key | A holder of fewer shares than the threshold learns the fingerprint, i.e. at most 64 bits about the key; the remaining search is about 2^192 SHA-256 evaluations. The fingerprint is domain-separated (`regino-keys/shamir/v1`). We consider it acceptable. | for the auditor |
-| 6 | `blahaj` randomness and coefficient sampling | Coefficients are drawn with `rand::distributions::Uniform::new_inclusive(0, 255)` from `rand::thread_rng()` (ChaCha12, reseeded from the OS) – zero included, so the `sharks` bias is gone; the secret is the constant term and x starts at 1. Test `shamir_coefficients_are_uniform_including_zero` checks the distribution of the share at x = 1. Notes: GF(256) uses log/exp tables (not constant-time) and blahaj does not zeroize its polynomial buffers; splitting runs once, locally, on the user's device. | verified |
-| 7 | SQLCipher: raw-key `PRAGMA`, key check, WAL, `rekey` | The `PRAGMA key` string is a `Zeroizing<String>` (rusqlite copies it into a C string for the call; that copy is not wiped). A wrong key is detected by `SELECT count(*) FROM sqlite_master` and nothing is written. The `-wal` file holds encrypted pages only (`wal_file_is_encrypted`); `rekey` works in WAL mode with uncheckpointed data and the old key no longer opens (`rekey_in_wal_mode`). | verified |
-| 8 | Legacy backup info for 32-byte secrets – weakness from mixing lengths? | The secret length selects the info (`… backup v1` for 32 B, `… backup v1 k128` for 16 B) and is itself the IKM length, so a backup made with one length never opens with the other, not even with the first 16 bytes of a 32-byte secret (`16- and 32-byte secrets are separated`). The fixed 0.1.0 backup still opens. | verified |
-| 9 | `backups.rs`: path traversal, temp file + `fsync` + rename, pruning | Names (prefix included) allow only letters, digits, `-`, `_` (`prefix_with_path_is_rejected`). Fixed in 0.8.0: the directory is `fsync`ed after the rename (Unix), the file just written is never pruned even if the clock went back (`new_backup_is_never_pruned_even_if_it_sorts_first`), stale `.<name>.tmp` files of the app are removed. | fixed |
-| 10 | `signed.ts`: certificate checks, unsigned prefix, `kid` lookup | `nbf ≤ at ≤ exp`, the certificate `kid` must match the list entry, revoked kids are dropped, roots are never taken from the list. The `kid` lookup only selects the key that is then used to verify. The prefix is not covered by the signature, so the payload decides: since 0.8.0 `verifyWithKeys` never accepts a payload with `typ: "cert"`, also a re-prefixed certificate. A future token version may sign the prefix too. | verified (hardened) |
-| 11 | Integrity of `tools/open-backup.html` | CI rebuilds it from `ts/` and fails on any difference; every release attaches it with `SHA256SUMS.txt`, so a user can compare the hash of the file they run with the release. | verified |
-| 12 | `cipher_memory_security` OFF | With it ON, Windows refused to lock more memory (`VirtualLock` error 1453) and the process crashed. Without it, freed SQLite memory (decrypted pages) is neither wiped nor locked against paging; key buffers are wiped. An attacker who can read process memory or the page file of the unlocked session is outside our threat model; we recommend full-disk encryption (BitLocker) to users. Is there a safer setup we missed? | for the auditor |
-| 13 | `sync.ts`: nonces, zero HKDF salt, P-256, pairing-code bias, context binding | Fixed in 0.8.0: the pairing code is unbiased (rejection sampling, label `sync pairing v2`). Our view on the rest: random 96-bit nonces under one record key stay far below 2^32 messages per group; the zero salt is the same case as question 3 (uniform 256-bit group key); P-256 for WebView support; `sync record v1\|<context>` as AAD binds group, table and id when the app puts them into the context. | fixed (bias) / for the auditor (rest) |
-| 14 | `inbox.ts`: HKDF salt/info, PKCS#8 export, page code, 80-bit fingerprint | Salt = ephemeral ‖ recipient key and the context in both info and AAD bind each message to one recipient and one purpose. The PKCS#8 export is needed so that all devices of a practice can open messages (finding 8). In Dôverník the form shows the fingerprint of the key it uses, the practice prints it on a leaflet, the app checks the published key every 6 h and the form script has SRI (finding 2, closed). 80 bits: finding a second key with a given fingerprint takes about 2^80 work. | for the auditor |
-| 15 | Pairing: is QR + 6-digit code enough, or a SAS over both keys with a commitment? | **Decided:** QR transport + `pairingCode` stays the way for devices side by side (the key never passes the server). For apps that move keys through a server the core now provides a SAS with a commitment (`newPairingNonce`, `pairingCommitment`, `checkPairingCommitment`, `pairingSas`), the numeric-comparison flow of Bluetooth LE Secure Connections; the flow and its rules are in `docs/PAIRING.md`, fixed vectors in `testvectors/regino/sync-0.8.0.json`. | decided |
-| 16 | Crypto-shredding vs. older backups – a per-backup key epoch? | **Decided: no key epoch.** A backup must open with the recovery phrase alone (that is its purpose after a lost device), so every key it needs is either derivable from the phrase or stored in it – an epoch cannot make an old backup unreadable without making it unrecoverable. Instead: `regino_vault::backups::discard_backups_before` (write a fresh backup after deleting a client, then discard older ones) and the app tells the user that copies made elsewhere still contain the client. Test `shredding_reaches_only_backups_made_after_deletion` shows exactly this. | decided |
-| 17 | `unwrapForDevice`: version label in the wrapped-key AAD? | Yes, since 0.8.0 wrapped group keys are v2: `sync wrap v2\|<context>` is both the HKDF info and the AAD; v1 blobs (bare context as AAD) are still unwrapped and the fixed 0.6.0 vector keeps passing. | fixed |
+| 1 | Other comparisons of secrets or tags that should be constant-time? | AEAD tags are checked inside RustCrypto and WebCrypto. `Key::eq` (`subtle`) is used only in tests. The remaining comparisons of secret-derived values are constant-time since 0.8.0: the Shamir key fingerprint in `shamir.rs` (`subtle`), the recovery checksum and the QR check bytes in `recovery.ts` and the PIN hash in `pin.ts` (`equalBytes`). Everything else compared is public (magic bytes, thresholds, share headers, lengths). | fixed |
+| 3 | HKDF without salt for the recovery key | The IKM is a uniformly random 128- or 256-bit secret, which is the RFC 5869 §3.1 case where a salt is optional; app name and secret length are in `info`. | verified |
+| 4 | 128 bits (12 words) as the default | A product decision rather than an audit question: 12 words stay the default (128-bit security; about 2^64 sequential quantum evaluations even with Grover), 24 words are available (`newRecoverySecret(24)`). | decided |
+| 5 | 64-bit Shamir fingerprint as a verifier of a 256-bit key | It tells a holder of fewer shares than the threshold at most 64 bits about the key; about 2^192 work remains. Domain-separated (`regino-keys/shamir/v1`). | verified |
+| 8 | Legacy backup info for 32-byte secrets | The secret length selects both the IKM length and the info, so a backup never opens with a secret of the other length, not even the first 16 bytes of a 32-byte one (`16- and 32-byte secrets are separated`); the fixed 0.1.0 backup still opens. Since 0.8.0 the header fields must be strings, the salt 16 B and the nonce 12 B. | verified |
+| 11 | Integrity of `tools/open-backup.html` | CI rebuilds it from `ts/` and fails on `git diff`; each release attaches it with `SHA256SUMS.txt`. | verified |
+
+### 4.2 Questions for the auditor
+
+| # | Question | What we did / our view | Status |
+|---|---|---|---|
+| 2 + 17 | **AAD and unambiguous contexts.** Is `magic ‖ context` (Rust) and `sync wrap v2\|<context>` / `sync record v1\|<context>` / `inbox message v1\|<context>` (TS) with the context rules in 3.2 sufficient? | Magic and labels have a fixed form and the context is the only variable field, so different contexts give different AAD (`aad_binds_magic_and_whole_context`); a length prefix would add nothing as long as apps follow 3.2. Wrapped group keys are v2 since 0.8.0 (label in HKDF info and AAD; v1 still read). Empty contexts are refused everywhere since 0.8.0. | fixed (v2, empty) – please review the rules |
+| 6 | **Memory hygiene of Shamir.** | blahaj 0.6 draws coefficients uniformly from 0..=255 (`Uniform::new_inclusive`, `thread_rng`), zero included (`shamir_coefficients_are_uniform_including_zero`). blahaj does not zeroize its polynomials and share buffers; we hash the key without a copy and wrap the recovered secret in `Zeroizing` (0.8.0). GF(256) uses log/exp tables (not constant-time); splitting runs once, locally. Is that acceptable? | verified – your opinion |
+| 7 + 12 | **SQLCipher: raw key, WAL, `rekey`, `cipher_memory_security`.** | The `PRAGMA key` string is `Zeroizing` (rusqlite's C-string copy is not). Wrong key → `sqlite_master` check fails, nothing written. The `-wal` file holds encrypted pages (`wal_file_is_encrypted`); `rekey` works in WAL mode (`rekey_in_wal_mode`). `cipher_memory_security` is OFF: with it ON Windows failed `VirtualLock` (error 1453) and the process crashed; freed SQLite pages are therefore not wiped or locked against paging, key buffers are. We recommend full-disk encryption. Is there a safer setup? | verified – your opinion |
+| 9 | **`backups.rs`** | Names (prefix included) allow only `[A-Za-z0-9_-]` and the app's extension (`prefix_with_path_is_rejected`). Since 0.8.0: `fsync` of the file and, on Unix, of the directory after the rename; the file just written is never pruned (`new_backup_is_never_pruned_even_if_it_sorts_first`); stale `.<name>.tmp` files removed; `discard_backups_before`. | fixed – please review |
+| 10 | **`signed.ts`** | `nbf ≤ at ≤ exp`; the certificate `kid` must match the list entry; roots never come from the list; since 0.8.0 a kid revoked anywhere in the list is dropped everywhere (it was dropped only for that entry) and `verifyWithKeys` never accepts a `typ: "cert"` payload, because the prefix is not signed. | fixed – please review |
+| 13 | **One record key per group, random 96-bit IVs on many devices.** | All devices of a group seal with the same record key and pick random IVs independently; there is no counter or key rotation. A collision needs about 2^48 records for probability 2^-1 (birthday bound), and stays below 2^-33 for 2^32 records; a household or practice writes far fewer. The zero HKDF salt is the case of question 3 (finding 6). Is a limit or rotation needed? | your opinion |
+| 14 | **Inbox.** | Salt = ephemeral ‖ recipient key, context in info and AAD; PKCS#8 export so all devices of a practice can open messages (finding 8); 80-bit fingerprint. Dôverník shows the fingerprint in the form, prints it, checks the published key every 6 h and loads the form script with SRI (finding 2, closed; `docs/INBOX.md`). | your opinion |
+| 15 | **Pairing.** | QR transport + `pairingCode` (unbiased since 0.8.0) for devices side by side; for keys through a server a SAS with a commitment (`pairingCommitment`, `checkPairingCommitment`, `pairingSas`), flow in `docs/PAIRING.md`, fixed vectors. | decided – please review the SAS flow |
+| 16 | **Crypto-shredding vs. older backups.** | No key epoch: a backup must open with the recovery phrase alone, so anything it needs is derivable from the phrase or inside it; today's backups are plain JSON under the backup key (3.1). Instead `discard_backups_before` and the app's duty to tell the user about copies elsewhere (`shredding_reaches_only_backups_made_after_deletion`). | decided – your opinion |
 
 ## 5. Existing assurance
 

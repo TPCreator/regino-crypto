@@ -52,7 +52,7 @@ not send `nE` before it holds `C`; N must not reveal `nN` before it holds `nE`; 
 attempts in a row should lock pairing for a while and tell the user someone may be interfering.
 Fixed vectors for the commitment and the SAS: `testvectors/regino/sync-0.8.0.json`.
 
-## Flow (as implemented in Gazda, core pinned to 0.5.0)
+## Flow (as implemented in Gazda, core pinned to 0.5.0 – before the 0.8.0 changes)
 
 1. **New device** generates its key pair and shows a QR code
    `GZSYNC1:<deviceId>:<publicKey base64>` with the 6-digit `pairingCode(publicKey)` under it.
@@ -68,6 +68,11 @@ Fixed vectors for the commitment and the SAS: `testvectors/regino/sync-0.8.0.jso
 
 The server sees the device id and the wrapped blob. It never sees the public key or the group key.
 Device tokens are stored on the server as SHA-256 hashes.
+
+When Gazda moves to 0.8.0: `wrapForDevice` writes v2 blobs (cores before 0.8.0 cannot unwrap them)
+and `pairingCode` gives other digits than 0.5.0–0.7.0, so both devices must run the same core – the
+pairing QR code should carry the app or core version and a mismatch should be refused. Existing v1
+blobs keep unwrapping. The SAS flow above is not needed while the key travels by QR code.
 
 ## What an auditor may want to check
 

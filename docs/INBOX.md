@@ -48,18 +48,26 @@ security review (AUDIT.md, question 14).
    already verifies Ed25519 certificates in `signed.ts`), so a client who has the practice's root key
    or a previous visit's pinned key can verify a new key.
 
-## Flow (as implemented in Dôverník, core pinned to 0.6.0)
+## Flow (as implemented in Dôverník a9a8d91, core pinned to 0.6.0)
 
 1. The practice turns on its page: the app calls `newInboxKeys`, seals the private key with the
    app's master key in its database, and publishes the public key to the API (`PUT /v1/practice`).
 2. The practice's page is rendered by the same server; the public key is put into the page
-   configuration. The form script (built from this repository's `ts/`) calls
+   configuration. The form script (built from this repository's `ts/`, loaded with SRI sha384) calls
    `sealToInbox(publicKey, "dovernik|request|<rid>", JSON of the answers)`; the request id `rid` is
-   generated in the browser.
-3. The practice's app downloads the sealed request and opens it with `openFromInbox`.
-4. **Not yet done (October 2026):** `inboxFingerprint` is not used anywhere; the client does not see a
-   fingerprint, the practice does not print one, and the app does not compare the published key with
-   its own. The app's plan is steps 1 and 2 above; step 3 is a recommendation for the web side.
+   generated in the browser. Next to the submit button the form shows `inboxFingerprint` of the key it
+   uses and the sentence that without a fingerprint from the practice to compare, the client relies
+   on the site operator.
+3. The practice's app shows the same fingerprint in Settings › Online services and prints it on a
+   leaflet for clients (page address, QR code, fingerprint).
+4. After publishing and then every 6 hours the app fetches the public practice page from its public
+   address – as a client gets it, not through the API – and compares the key in the form
+   configuration with its own. A mismatch fails publishing, warns in the app and is logged.
+5. The practice's app downloads the sealed request and opens it with `openFromInbox`.
+
+Status: steps 1 and 2 of "What an app must do" are done, step 3 is done with SRI on the same origin (a
+separate static origin was not used – same operator, no real gain); step 4 (a practice-signed key)
+is not done. Deployed to production on 2026-10-18; finding 2 in `audits/` is closed.
 
 ## What an auditor may want to check
 
