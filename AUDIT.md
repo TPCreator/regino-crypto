@@ -2,7 +2,7 @@
 
 *Contact and vulnerability reporting: [SECURITY.md](SECURITY.md).*
 
-**Brief for version 0.8.0 (18 October 2026).** Proposed commit for the
+**Brief for version 0.8.1 (18 October 2026).** Proposed commit for the
 review: a signed tag `audit-<date>` on `main`, created when the engagement starts (so that line
 references in the report stay verifiable). Known findings from a pre-audit review, with their status,
 are listed in [`audits/`](audits/) – please do not spend time re-discovering them. Before the
@@ -17,6 +17,7 @@ question. Changes since the first draft of this brief:
 | 0.6.0 | inbox: people without an account (a web form, a document signed in the browser) seal data to a recipient's public key | `ts/src/inbox.ts` |
 | 0.7.0 | pre-audit review: `unwrapForDevice` validates the ephemeral key and the result; corrected claims; `docs/PAIRING.md`, `docs/INBOX.md`; findings and status in `audits/` | `ts/src/sync.ts`, `docs/`, `audits/` |
 | 0.8.0 | self-review of questions 1–17: constant-time checks, wrapped group keys v2, unbiased pairing code, SAS with commitment for pairing through a server, backups (directory `fsync`, never prune the new file, `discard_backups_before`), licence verification never accepts a certificate payload; new tests and fixed vectors | `keys/src/shamir.rs`, `ts/src/bytes.ts`, `ts/src/sync.ts`, `ts/src/signed.ts`, `vault/src/backups.rs`, `docs/PAIRING.md` |
+| 0.8.1 | second review: SBOM tools pinned exactly in the release, `to_hex` / key `PRAGMA` without unwiped copies; no API or format change | `.github/workflows/release.yml`, `vault/src/lib.rs` |
 
 This document scopes an independent security review of **regino-crypto**, an encryption core
 shared by several offline-first apps that store sensitive personal data – including
