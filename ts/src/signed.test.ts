@@ -191,9 +191,11 @@ describe('signed tokens', () => {
       { kid: 'other-kid', cert },
       { kid: 'demo-2025', cert: 'RG1.x.y' },
     ];
-    expect(await certifiedKeys(list, roots, AT)).toHaveLength(1);
-    expect(await certifiedKeys(list, roots, AT, ['demo-2026'])).toHaveLength(0);
-    expect(await certifiedKeys(list, [], AT)).toHaveLength(0);
+    // revoked once = revoked everywhere: the second entry with the same kid does not count
+    expect(await certifiedKeys(list, roots, AT)).toHaveLength(0);
+    expect(await certifiedKeys(list.slice(1), roots, AT)).toHaveLength(1);
+    expect(await certifiedKeys(list.slice(1), roots, AT, ['demo-2026'])).toHaveLength(0);
+    expect(await certifiedKeys(list.slice(1), [], AT)).toHaveLength(0);
   });
 
   it('Wycheproof Ed25519: valid accepted, invalid rejected (strict RFC 8032)', async () => {

@@ -129,11 +129,14 @@ export async function certifiedKeys(
   at: number,
   revoked: readonly string[] = [],
 ): Promise<CertifiedKey[]> {
+  // A kid revoked anywhere in the list (or by the caller) is dropped everywhere – another entry with
+  // the same kid must not bring the key back.
+  const dropped = new Set([...revoked, ...entries.filter((e) => e.status === 'revoked').map((e) => e.kid)]);
   const out: CertifiedKey[] = [];
   for (const e of entries) {
-    if (e.status === 'revoked' || revoked.includes(e.kid)) continue;
+    if (dropped.has(e.kid)) continue;
     const key = await verifyCertificate(e.cert, roots, at);
-    if (key && key.kid === e.kid && !revoked.includes(key.kid)) out.push(key);
+    if (key && key.kid === e.kid && !dropped.has(key.kid)) out.push(key);
   }
   return out;
 }
