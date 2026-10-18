@@ -10,8 +10,11 @@
  *   public key, info = version and context) → AES-256-GCM with a random 96-bit nonce; the context
  *   (e.g. app, practice, form and request id) is also bound as additional data.
  * - The sender is anonymous: a message proves it was not changed, not who sent it.
- * - Fingerprint: the recipient's app compares the fingerprint of the key the server publishes with
- *   its own, so a server that swaps the key is noticed.
+ * - Fingerprint: a short fingerprint of the recipient's public key for publishing out of band (on
+ *   paper, in the recipient's own app, read out by phone). The recipient's app compares it with the
+ *   key the server publishes; a sender can compare it with the key the page shows. The server can
+ *   serve one key to the recipient and another to senders, so only a fingerprint the sender gets
+ *   from somewhere else than the server protects the sender (see AUDIT.md, question 14).
  */
 import { b64, checkP256Point, ECDH, sealingKey, unb64 } from "./ecdh";
 
@@ -135,7 +138,9 @@ export async function openFromInbox(
 
 /**
  * Fingerprint of an inbox public key ("3f2a 9c01 …", 80 bits). The recipient's app checks that the
- * key published by the server has the fingerprint of its own key.
+ * key published by the server has the fingerprint of its own key; a sender who has the fingerprint
+ * from the recipient directly can check the key the page shows. It does not help a sender who has
+ * nothing but what the server serves.
  */
 export async function inboxFingerprint(publicKey: Uint8Array): Promise<string> {
   checkPublicKey(publicKey);

@@ -21,12 +21,12 @@ jobs:
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # stable
         with: { toolchain: stable, components: clippy }
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo test --workspace (including Wycheproof vectors)
         shell: bash
         run: |
           set -o pipefail
-          if ! cargo test --workspace --no-fail-fast 2>&1 | tee test.log; then
+          if ! cargo test --workspace --locked --no-fail-fast 2>&1 | tee test.log; then
             # surface the cause as one public annotation (run logs cannot be downloaded without signing in;
             # GitHub keeps only 10 annotations per step, so join the lines)
             msg=$(grep -vE "ERROR CORE|Compiling|^test .* \.\.\. ok$|test result: ok" test.log \
@@ -62,7 +62,7 @@ jobs:
         with: { persist-credentials: false }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 22 }
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - name: Vulnerable packages (npm audit)
         run: npm audit --audit-level=moderate
       - run: npx tsc --noEmit

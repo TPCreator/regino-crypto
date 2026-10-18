@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { b64, sealingKey } from "./ecdh";
 import {
   fromBase64,
   newDeviceKeys,
@@ -137,6 +138,34 @@ describe("device keys", () => {
       ),
     ).rejects.toThrow("public key");
     await expect(pairingCode(new Uint8Array(3))).rejects.toThrow("public key");
+  });
+
+  it("a wrapped key with an invalid ephemeral key or a plaintext that is not a key is refused", async () => {
+    const phone = await newDeviceKeys();
+    const phonePublic = await publicKeyBytes(phone.publicKey);
+    const wrapped = await wrapForDevice(newGroupKey(), phonePublic, "g1|device|d2");
+    // Ephemeral key of the wrong length or not an uncompressed point – refused before ECDH.
+    await expect(
+      unwrapForDevice({ ...wrapped, e: toBase64(new Uint8Array(33)) }, phone.privateKey, phonePublic, "g1|device|d2"),
+    ).rejects.toThrow("cannot be unwrapped");
+    const compressed = fromBase64(wrapped.e);
+    compressed[0] = 2;
+    await expect(
+      unwrapForDevice({ ...wrapped, e: toBase64(compressed) }, phone.privateKey, phonePublic, "g1|device|d2"),
+    ).rejects.toThrow("cannot be unwrapped");
+    // A blob sealed correctly for this device but carrying 16 bytes instead of a 32-byte group key.
+    const eph = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"])) as CryptoKeyPair;
+    const ephPublic = await publicKeyBytes(eph.publicKey);
+    const key = await sealingKey(eph.privateKey, phonePublic, ephPublic, phonePublic, `sync wrap v${SYNC_VERSION}|g1|device|d2`);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const c = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode("g1|device|d2") },
+      key,
+      new Uint8Array(16),
+    );
+    await expect(
+      unwrapForDevice({ v: SYNC_VERSION, e: b64(ephPublic), n: b64(nonce), c: b64(new Uint8Array(c)) }, phone.privateKey, phonePublic, "g1|device|d2"),
+    ).rejects.toThrow("cannot be unwrapped");
   });
 
   it("pairing code: 6 digits, the same on both devices, different for another key", async () => {

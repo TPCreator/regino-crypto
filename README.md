@@ -17,7 +17,7 @@ password ──Argon2id──► password key ──┐
 recovery code (12/24 words) ──────────┼─ wraps ─► master key ─ wraps ─► client key ─ seals ─► client records
 2 of 3 shares (paper / person / notary) ┘
 ```
-- Deleting a client = discarding the client's wrapped key → its records become unreadable, in all backups too.
+- Deleting a client = discarding the client's wrapped key → its records become unreadable in the database and in every backup made **after** the deletion. A backup made earlier still contains the wrapped key, so the app has to delete or re-create old backups when it deletes a client (see `AUDIT.md`, question 16).
 - Changing the password = re-wrapping the master key; data is not re-encrypted.
 - No single share of the "2 of 3" opens anything on its own – not even the one held by the operator.
 
@@ -29,11 +29,12 @@ recovery code (12/24 words) ──────────┼─ wraps ─► ma
 
 ## Audit
 Material for an independent security review (scope, threat model, parameters, questions): [AUDIT.md](AUDIT.md).
+Known findings from a pre-audit review and their status: [`audits/`](audits/).
 
 ## Rules
 - Only well-reviewed libraries (RustCrypto, SQLCipher, WebCrypto) – no home-grown cryptography.
 - Format version in the header of every wrapped key and backup.
-- Tests on every change (`cargo test --workspace`, `npx vitest run --coverage` in `ts/`, 100 % coverage).
+- Tests on every change (`cargo test --workspace`, `npx vitest run --coverage` in `ts/` with 100 % coverage enforced for the TypeScript part; Rust coverage is not measured yet).
 - Independent security audit before production use.
 
 ## Security
@@ -44,7 +45,7 @@ Please report vulnerabilities privately – see [SECURITY.md](SECURITY.md).
 
 ## Changelog
 
-- **0.6.0 (2026-10-17):** inbox (`inbox.ts`): a recipient key pair (ECDH P-256, private key exported once as PKCS#8 for the app to keep wrapped, imported non-extractable), messages sealed to the public key with an ephemeral ECDH key + HKDF-SHA256 → AES-256-GCM and the context bound as additional data, key fingerprint so the app notices a swapped key on the server. For web forms and documents signed in the browser (Dôverník). WebCrypto only, no new libraries.
+- **0.6.0 (2026-10-17):** inbox (`inbox.ts`): a recipient key pair (ECDH P-256, private key exported once as PKCS#8 for the app to keep wrapped, imported non-extractable), messages sealed to the public key with an ephemeral ECDH key + HKDF-SHA256 → AES-256-GCM and the context bound as additional data, key fingerprint so the practice can publish it out of band and a sender can check the key the server shows (the server itself can serve a different key to senders than to the practice – see `AUDIT.md`). For web forms and documents signed in the browser (Dôverník). WebCrypto only, no new libraries.
 - **0.5.0 (2026-10-17):** sync between devices (`sync.ts`): group key, records sealed with HKDF-SHA256 → AES-256-GCM and the context bound as additional data, device key pairs (ECDH P-256, non-extractable private key), group key wrapped for a device (ephemeral ECDH + HKDF-SHA256 → AES-256-GCM), 6-digit pairing code. WebCrypto only, no new libraries.
 - **0.4.0 (2026-10-16):** verification of signed tokens (`signed.ts`): Ed25519 via `@noble/ed25519` (strict RFC 8032), key certificates from built-in root keys, key lists, Wycheproof Ed25519 vectors. Vault: `cipher_memory_security` left off (crashed on Windows, see `AUDIT.md`).
 - **0.3.0 (2026-10-16):** the app name for backups is **required** (`encryptBackup(secret, payload, createdAt, app)`, `decryptBackup(secret, file, app)`) – the default value was removed; the `<app>-backup` format and the keys are unchanged, old backups open with the same app name. Audit preparation: `AUDIT.md`, Wycheproof test vectors, cargo-deny and npm audit in CI.

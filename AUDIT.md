@@ -2,8 +2,11 @@
 
 *Contact and vulnerability reporting: [SECURITY.md](SECURITY.md).*
 
-**Brief for version 0.6.0 (17 October 2026).** Proposed commit for the review: tag `v0.6.0` on `main`
-(the final commit is fixed when the engagement starts). Changes since the first draft of this brief:
+**Brief for version 0.6.0 (17 October 2026, updated 18 October 2026).** Proposed commit for the
+review: a signed tag `audit-<date>` on `main`, created when the engagement starts (so that line
+references in the report stay verifiable). Known findings from a pre-audit review, with their status,
+are listed in [`audits/`](audits/) – please do not spend time re-discovering them. Changes since the
+first draft of this brief:
 
 | Version | Added | Files |
 |---|---|---|
@@ -43,7 +46,8 @@ Assets: personal financial records; special-category personal data (e.g. health)
 | Anyone who obtains a backup file (OneDrive, Google Drive, e-mail) | offline attack on the file | cannot decrypt, cannot alter it undetected (incl. header fields) |
 | The app operator | runs future sync and server, publishes the apps | never able to decrypt user data; no single 2-of-3 share opens a key |
 | Another member of a shared household device | uses the app UI | PIN only stops switching to another user; it is **not** a data-protection boundary |
-| The server in the middle of an inbox (web form → practice) | stores and forwards sealed messages, serves the practice's public key | cannot read messages; a swapped public key is noticed by the practice app via the fingerprint (a server that serves malicious page code is out of scope – see question 14) |
+| The server in the middle of an inbox (web form → practice) | stores and forwards sealed messages, serves the practice's public key | cannot read messages sealed to the practice's real key. **Not protected by the core alone:** the server can serve its own public key to senders while showing the practice its real key, so the practice's fingerprint check does not notice it; a sender is protected only if they get the fingerprint from the practice out of band (printed, in person, by phone) and compare it – see question 14 and finding 2 in `audits/` (a server that serves malicious page code is out of scope) |
+| The sync server during pairing | forwards the new device's public key to the existing device | **Not protected by the 6-digit pairing code:** the server can find a key pair with the same code in about 10^6 tries, so the code only catches a mix-up. Protection needs the existing device to take the new device's key out of band (QR scan) or to compare a long fingerprint – see question 15 and finding 1 in `audits/` |
 | Wrong context / swapped blobs | substitutes one client's wrapped key or sealed record for another | rejected (context is authenticated) |
 
 **Not protected:** malware or an attacker inside the unlocked user session; coerced unlock;
@@ -95,28 +99,45 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
     PKCS#8 so all devices of a practice can use it – the app keeps it wrapped by its own keys; any
     weakness in that? The page code comes from our server, so a compromised server could serve code
     that leaks form data before sealing – what mitigations do you recommend (SRI, a separate static
-    origin, publishing hashes of the page code)?
+    origin, publishing hashes of the page code)? The 80-bit fingerprint is meant to be published out
+    of band by the practice; is 80 bits enough, and how should the sender's page present it?
+
+15. Pairing (`sync.ts`, `pairingCode`): a 6-digit code derived from the new device's public key
+    alone. We now treat it as a guard against mistakes, not against the server forwarding the key
+    (a key pair with a given 6-digit code is found in about 10^6 tries). Is an out-of-band QR scan
+    of the 65-byte key by the existing device sufficient, or should the code be a SAS over both
+    public keys with a commitment (as in e.g. ZRTP / Signal safety numbers)?
+
+16. Crypto-shredding (`keys/`, README): deleting a client = discarding its wrapped key. Backups
+    made before the deletion still carry the wrapped key. Besides deleting or re-creating old
+    backups in the app, is there anything the core should do (e.g. a per-backup key epoch)?
+
+17. `unwrapForDevice` (`sync.ts`): the ephemeral public key is validated as an uncompressed P-256
+    point and the result must be 32 bytes (added after the pre-audit review). WebCrypto rejects
+    points off the curve on import; is the explicit check enough, or should the wrapped-key AAD
+    also carry a version label like the records do (`sync record v1|…` vs. the bare context)?
 
 ## 5. Existing assurance
 
-- Tests on every change: `cargo test --workspace`, `cd ts && npx vitest run --coverage` (100 % coverage enforced).
+- Tests on every change: `cargo test --workspace`, `cd ts && npx vitest run --coverage` (100 % line, branch and function coverage enforced for the TypeScript part; Rust coverage is not measured yet).
 - Fixed cross-language vectors (Rust ↔ TS) for the recovery key; snapshot of the word list.
 - **Wycheproof** vectors (`testvectors/wycheproof/`): XChaCha20-Poly1305, AES-256-GCM (96-bit IV), HKDF-SHA256, Ed25519, ECDH P-256 with raw points (incl. invalid-curve and wrong-curve attacks) – valid inputs accepted, invalid rejected.
 - Fixed format vectors that must keep opening in future versions: a backup made by 0.1.0, an inbox message made by 0.6.0.
 - **cargo-deny** (`deny.toml`): RustSec advisories, yanked crates, license allow-list, crates.io only. **npm audit** for `ts/`.
-- CI actions pinned to commit hashes, read-only token. Releases attach CycloneDX SBOMs and SHA-256 checksums.
+- CI actions pinned to commit hashes, read-only token, `npm ci` and `cargo --locked` against the committed lockfiles. Releases attach CycloneDX SBOMs and SHA-256 checksums; the release build runs with a read-only token and only the upload step has write access.
 
 ## 6. How to build and test
 
 ```sh
-cargo test --workspace            # Rust (keys, vault; SQLCipher builds from source)
-cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked   # Rust (keys, vault; SQLCipher builds from source)
+cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo deny check                  # needs cargo-deny
-cd ts && npm install && npx vitest run --coverage && npx tsc --noEmit
+cd ts && npm ci && npx vitest run --coverage && npx tsc --noEmit
 npm run build:tool                # rebuilds tools/open-backup.html
 ```
 
 ## 7. What we expect from the review
 
 A written report with findings rated by severity and concrete fixes; a short retest of our fixes;
-and permission to publish the report (or a summary) next to this repository.
+and permission to publish the report (or a summary) in [`audits/`](audits/) in this repository, with a
+signed tag marking the retested commit.

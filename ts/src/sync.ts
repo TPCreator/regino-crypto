@@ -9,7 +9,8 @@
  *   never leaves the device. The group key is wrapped for a device with an ephemeral ECDH key,
  *   HKDF-SHA256 (salt = both public keys) → AES-256-GCM.
  * - Pairing: the new device shows its public key (e.g. as a QR code); both devices show a short
- *   code derived from it, so people can confirm that the right device was paired.
+ *   code derived from it, so people can confirm that the right device was paired. The code guards
+ *   against mistakes, not against a server that forwards the key (see `pairingCode`).
  */
 import { b64, checkP256Point, ECDH, sealingKey, unb64 } from "./ecdh";
 
@@ -180,6 +181,7 @@ export async function unwrapForDevice(
   checkPublicKey(devicePublic);
   try {
     const ephPublic = unb64(wrapped.e);
+    checkPublicKey(ephPublic);
     const key = await wrapKey(
       devicePrivate,
       ephPublic,
@@ -196,6 +198,7 @@ export async function unwrapForDevice(
       key,
       unb64(wrapped.c) as BufferSource,
     );
+    if (plain.byteLength !== 32) throw new Error("not a group key");
     return new Uint8Array(plain);
   } catch {
     throw new Error("The group key cannot be unwrapped on this device.");
@@ -205,6 +208,12 @@ export async function unwrapForDevice(
 /**
  * Short pairing code (6 digits, "123 456") from a device public key. Both devices show it;
  * if the codes match, the right device was paired.
+ *
+ * Limits (see AUDIT.md, question 15): 6 digits only stop an accidental mix-up. Whoever carries
+ * the public key (e.g. the sync server) can try about a million key pairs and find one with the
+ * same code, so the code is not a defence against a malicious server. For that the existing
+ * device must take the new device's key out of band (scan its QR code), or the app must compare
+ * a long fingerprint.
  */
 export async function pairingCode(devicePublic: Uint8Array): Promise<string> {
   checkPublicKey(devicePublic);

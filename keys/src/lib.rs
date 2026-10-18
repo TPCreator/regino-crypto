@@ -6,7 +6,8 @@
 //! - [`shamir`] – splitting a key into N shares of which any K suffice (e.g. 2-of-3), with integrity check.
 //!
 //! Deleting data = discarding the wrapped key (crypto-shredding): without it, sealed data
-//! is unreadable, including in every backup.
+//! is unreadable – in the database and in every backup made after the key was discarded.
+//! A backup made before still carries the wrapped key; the app must handle such backups.
 
 use zeroize::Zeroizing;
 
