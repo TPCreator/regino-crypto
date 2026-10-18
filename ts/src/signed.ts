@@ -129,11 +129,14 @@ export async function certifiedKeys(
   at: number,
   revoked: readonly string[] = [],
 ): Promise<CertifiedKey[]> {
+  // A kid revoked anywhere in the list (or by the caller) is dropped everywhere – another entry with
+  // the same kid must not bring the key back.
+  const dropped = new Set([...revoked, ...entries.filter((e) => e.status === 'revoked').map((e) => e.kid)]);
   const out: CertifiedKey[] = [];
   for (const e of entries) {
-    if (e.status === 'revoked' || revoked.includes(e.kid)) continue;
+    if (dropped.has(e.kid)) continue;
     const key = await verifyCertificate(e.cert, roots, at);
-    if (key && key.kid === e.kid && !revoked.includes(key.kid)) out.push(key);
+    if (key && key.kid === e.kid && !dropped.has(key.kid)) out.push(key);
   }
   return out;
 }
@@ -141,6 +144,10 @@ export async function certifiedKeys(
 /**
  * Verifies a token signed by a certified key for `product` and `use`: the `kid` in the payload must
  * name such a key, and `product` in the payload must match. Returns the payload or null.
+ *
+ * The prefix is not covered by the signature (it only names the token kind), so the payload decides:
+ * a certificate payload (`typ: "cert"`) is never accepted here, even if a key were ever used both as
+ * a root and as a product key (question 10).
  */
 export async function verifyWithKeys(
   token: string,
@@ -150,6 +157,6 @@ export async function verifyWithKeys(
   const kid = peekToken(token)?.payload.kid;
   const key = keys.find((k) => k.kid === kid && k.product === expect.product && k.use === expect.use);
   const v = key ? await verifyToken(token, key.pub) : null;
-  if (!v || v.prefix !== expect.prefix || v.payload.product !== expect.product) return null;
+  if (!v || v.prefix !== expect.prefix || v.payload.product !== expect.product || v.payload.typ === 'cert') return null;
   return v.payload;
 }

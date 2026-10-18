@@ -25,21 +25,10 @@ export interface EncryptedBackup {
   ciphertext: string;
 }
 
+import { b64, gcmNonce, unb64 } from './ecdh';
+
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-
-function b64(bytes: Uint8Array): string {
-  let s = '';
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
-}
-
-function unb64(text: string): Uint8Array {
-  const s = atob(text);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-  return out;
-}
 
 /**
  * HKDF context (info). The 24-word code (32 B) keeps the original context, so backups from
@@ -110,22 +99,31 @@ export async function decryptBackup<T = unknown>(
 ): Promise<{ ok: true; payload: T; createdAt: string } | { ok: false; error: DecryptError }> {
   const f = file as Partial<EncryptedBackup> | null;
   const format = formatOf(app);
-  if (!f || f.format !== format || typeof f.ciphertext !== 'string')
+  if (
+    !f ||
+    f.format !== format ||
+    typeof f.ciphertext !== 'string' ||
+    typeof f.salt !== 'string' ||
+    typeof f.nonce !== 'string' ||
+    typeof f.createdAt !== 'string'
+  )
     return { ok: false, error: 'not-backup' };
   if (typeof f.version !== 'number' || f.version > BACKUP_VERSION)
     return { ok: false, error: 'newer-version' };
   try {
-    const key = await backupKey(secret, unb64(f.salt as string), app);
+    const salt = unb64(f.salt);
+    if (salt.length !== 16) throw new Error('The salt must have 16 bytes.');
+    const key = await backupKey(secret, salt, app);
     const aad = enc.encode(`${format}|${f.version}|${f.createdAt}`);
     const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: unb64(f.nonce as string) as BufferSource, additionalData: aad },
+      { name: 'AES-GCM', iv: gcmNonce(f.nonce) as BufferSource, additionalData: aad },
       key,
       unb64(f.ciphertext) as BufferSource,
     );
     return {
       ok: true,
       payload: JSON.parse(dec.decode(plain)) as T,
-      createdAt: f.createdAt as string,
+      createdAt: f.createdAt,
     };
   } catch {
     return { ok: false, error: 'wrong-key-or-damaged' };

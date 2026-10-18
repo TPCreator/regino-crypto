@@ -16,7 +16,7 @@
  *   serve one key to the recipient and another to senders, so only a fingerprint the sender gets
  *   from somewhere else than the server protects the sender (see AUDIT.md, question 14).
  */
-import { b64, checkP256Point, ECDH, sealingKey, unb64 } from "./ecdh";
+import { b64, checkContext, checkP256Point, ECDH, gcmNonce, sealingKey, unb64 } from "./ecdh";
 
 export const INBOX_VERSION = 1;
 
@@ -28,10 +28,7 @@ function b64url(text: string): Uint8Array {
 
 const checkPublicKey = (key: Uint8Array) => checkP256Point(key, "inbox");
 
-function checkContext(context: string): void {
-  if (typeof context !== "string" || context === "")
-    throw new Error("The inbox context must not be empty.");
-}
+const checkInboxContext = (context: string) => checkContext(context, "inbox");
 
 export interface InboxKeys {
   /** 65 bytes (uncompressed point) – publish it on the server, e.g. on the practice web page. */
@@ -99,7 +96,7 @@ export async function sealToInbox(
   data: Uint8Array,
 ): Promise<InboxMessage> {
   checkPublicKey(recipientPublic);
-  checkContext(context);
+  checkInboxContext(context);
   if (!(data instanceof Uint8Array)) throw new Error("Inbox data must be bytes.");
   const eph = (await crypto.subtle.generateKey(ECDH, false, ["deriveBits"])) as CryptoKeyPair;
   const ephPublic = new Uint8Array(await crypto.subtle.exportKey("raw", eph.publicKey));
@@ -120,13 +117,13 @@ export async function openFromInbox(
   message: InboxMessage,
 ): Promise<Uint8Array> {
   if (!message || message.v !== INBOX_VERSION) throw new Error("Unsupported inbox message version.");
-  checkContext(context);
+  checkInboxContext(context);
   try {
     const ephPublic = unb64(message.e);
     checkPublicKey(ephPublic);
     const k = await messageKey(key.privateKey, ephPublic, ephPublic, key.publicKey, context);
     const plain = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: unb64(message.n) as BufferSource, additionalData: messageAad(context) },
+      { name: "AES-GCM", iv: gcmNonce(message.n) as BufferSource, additionalData: messageAad(context) },
       k,
       unb64(message.c) as BufferSource,
     );

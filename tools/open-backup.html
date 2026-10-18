@@ -22,7 +22,7 @@
 <h1>Open a backup independently</h1>
 <p lang="sk" class="sk">Slovensky: Otvorte zálohu svojím obnovovacím kódom (12 alebo 24 slov alebo QR kód). Všetko prebieha len vo vašom prehliadači.</p>
 <p>This file opens an encrypted backup from an app that uses the regino-crypto core, using your recovery code (12 or 24 words, or the QR code from the recovery sheet). It runs only in your browser – <b>nothing is sent to the internet</b> (you can open it offline too).</p>
-<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.7.0.</small></p>
+<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.8.0.</small></p>
 <label for="file">Backup file</label>
 <input id="file" type="file" accept=".json,application/json,*/*">
 <label for="words">Recovery code – 12 or 24 words</label>
@@ -10087,6 +10087,20 @@
   // tools/page.ts
   var import_jsqr = __toESM(require_jsQR(), 1);
 
+  // src/ecdh.ts
+  var enc = new TextEncoder();
+  function unb64(text) {
+    const s = atob(text);
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  }
+  function gcmNonce(text) {
+    const n = unb64(text);
+    if (n.length !== 12) throw new Error("The nonce must have 12 bytes.");
+    return n;
+  }
+
   // src/backup.ts
   var APP = /^[a-z][a-z0-9]{1,31}$/;
   var formatOf = (app) => {
@@ -10094,21 +10108,15 @@
     return `${app}-backup`;
   };
   var BACKUP_VERSION = 1;
-  var enc = new TextEncoder();
+  var enc2 = new TextEncoder();
   var dec = new TextDecoder();
-  function unb64(text) {
-    const s = atob(text);
-    const out = new Uint8Array(s.length);
-    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-    return out;
-  }
   function backupInfo(secret, app) {
     if (secret.length === 32) return `${app} backup v1`;
     if (secret.length === 16) return `${app} backup v1 k128`;
     throw new Error("The recovery code must have 12 or 24 words.");
   }
   async function backupKey(secret, salt, app) {
-    const info = enc.encode(backupInfo(secret, app));
+    const info = enc2.encode(backupInfo(secret, app));
     const base = await crypto.subtle.importKey("raw", secret, "HKDF", false, [
       "deriveKey"
     ]);
@@ -10128,15 +10136,17 @@
   async function decryptBackup(secret, file, app) {
     const f = file;
     const format = formatOf(app);
-    if (!f || f.format !== format || typeof f.ciphertext !== "string")
+    if (!f || f.format !== format || typeof f.ciphertext !== "string" || typeof f.salt !== "string" || typeof f.nonce !== "string" || typeof f.createdAt !== "string")
       return { ok: false, error: "not-backup" };
     if (typeof f.version !== "number" || f.version > BACKUP_VERSION)
       return { ok: false, error: "newer-version" };
     try {
-      const key = await backupKey(secret, unb64(f.salt), app);
-      const aad = enc.encode(`${format}|${f.version}|${f.createdAt}`);
+      const salt = unb64(f.salt);
+      if (salt.length !== 16) throw new Error("The salt must have 16 bytes.");
+      const key = await backupKey(secret, salt, app);
+      const aad = enc2.encode(`${format}|${f.version}|${f.createdAt}`);
       const plain = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: unb64(f.nonce), additionalData: aad },
+        { name: "AES-GCM", iv: gcmNonce(f.nonce), additionalData: aad },
         key,
         unb64(f.ciphertext)
       );
@@ -10148,6 +10158,14 @@
     } catch {
       return { ok: false, error: "wrong-key-or-damaged" };
     }
+  }
+
+  // src/bytes.ts
+  function equalBytes(a, b) {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+    return diff === 0;
   }
 
   // src/wordlist-sk.ts
@@ -12218,7 +12236,7 @@
     if (qr) {
       if (!qr.ok) return { ok: false, error: { code: "qr" } };
       const check = await sha2(qr.secret);
-      if (check[0] !== qr.check[0] || check[1] !== qr.check[1]) return { ok: false, error: { code: "qr" } };
+      if (!equalBytes(check, qr.check)) return { ok: false, error: { code: "qr" } };
       return { ok: true, secret: qr.secret };
     }
     const words = input.split(/[\s,;.]+/).filter(Boolean);
@@ -12236,7 +12254,8 @@
     }
     const secret = new Uint8Array(BYTES[count]);
     for (let b = 0; b < secret.length; b++) secret[b] = parseInt(bits.slice(b * 8, b * 8 + 8), 2);
-    if (await checksumBits(secret) !== bits.slice(secret.length * 8))
+    const enc3 = new TextEncoder();
+    if (!equalBytes(enc3.encode(await checksumBits(secret)), enc3.encode(bits.slice(secret.length * 8))))
       return { ok: false, error: { code: "checksum" } };
     return { ok: true, secret };
   }

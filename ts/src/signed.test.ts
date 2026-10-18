@@ -131,6 +131,12 @@ describe('signed tokens', () => {
     const rogue = await keyPair();
     const forged = await sign('DM', { kid: 'demo-2026', product: 'demo' }, rogue.secret);
     expect(await verifyWithKeys(forged, keys, expect_)).toBeNull();
+    // Question 10: the prefix is not signed – a payload with typ "cert" is never a licence, even
+    // if a key were (wrongly) used both as a root and as a product key.
+    const certShaped = await sign('DM', { typ: 'cert', kid: 'demo-2026', product: 'demo' }, product.secret);
+    expect(await verifyWithKeys(certShaped, keys, expect_)).toBeNull();
+    const relabelled = cert.replace(/^RG1\./, 'DM1.');
+    expect(await verifyWithKeys(relabelled, keys, expect_)).toBeNull();
   });
 
   it('certificates: time window, signer, shape', async () => {
@@ -185,9 +191,11 @@ describe('signed tokens', () => {
       { kid: 'other-kid', cert },
       { kid: 'demo-2025', cert: 'RG1.x.y' },
     ];
-    expect(await certifiedKeys(list, roots, AT)).toHaveLength(1);
-    expect(await certifiedKeys(list, roots, AT, ['demo-2026'])).toHaveLength(0);
-    expect(await certifiedKeys(list, [], AT)).toHaveLength(0);
+    // revoked once = revoked everywhere: the second entry with the same kid does not count
+    expect(await certifiedKeys(list, roots, AT)).toHaveLength(0);
+    expect(await certifiedKeys(list.slice(1), roots, AT)).toHaveLength(1);
+    expect(await certifiedKeys(list.slice(1), roots, AT, ['demo-2026'])).toHaveLength(0);
+    expect(await certifiedKeys(list.slice(1), [], AT)).toHaveLength(0);
   });
 
   it('Wycheproof Ed25519: valid accepted, invalid rejected (strict RFC 8032)', async () => {

@@ -44,6 +44,15 @@ describe('independent backup opening', () => {
     [swapped[0], swapped[1]] = [swapped[1] as string, swapped[0] as string];
     const r = await openBackup(file, swapped.join(' '));
     expect(r.ok).toBe(false);
+    // Deterministic checksum error: a fixed secret whose swapped words fail the 4-bit checksum
+    // (with the random words above the swap keeps the checksum in 1 of 16 runs).
+    for (let i = 0; ; i++) {
+      const w = await secretToWords(new Uint8Array(16).fill(i));
+      [w[0], w[1]] = [w[1] as string, w[0] as string];
+      const res = await openBackup(file, w.join(' '));
+      if (!res.ok && res.message.includes('checksum')) break;
+      expect(i).toBeLessThan(16);
+    }
     const other = (await secretToWords(newRecoverySecret())).join(' ');
     expect(await openBackup(file, other)).toEqual({ ok: false, message: expect.stringContaining('does not belong') });
     const newer = JSON.stringify({ ...JSON.parse(file), version: 99 });

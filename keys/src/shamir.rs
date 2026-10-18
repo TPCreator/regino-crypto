@@ -7,11 +7,14 @@
 use crate::{Error, Key, KEY_LEN};
 use blahaj::{Share, Sharks};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 const MAGIC: &[u8; 4] = b"RGK1";
 
 fn fingerprint(key: &Key) -> [u8; 8] {
-    let h = Sha256::digest([b"regino-keys/shamir/v1".as_slice(), key.as_bytes()].concat());
+    // fed in parts – no temporary copy of the key that would have to be wiped
+    let h = Sha256::new().chain_update(b"regino-keys/shamir/v1").chain_update(key.as_bytes()).finalize();
     h[..8].try_into().expect("8 bytes")
 }
 
@@ -42,24 +45,31 @@ pub fn combine(parts: &[Vec<u8>]) -> Result<Key, Error> {
     }
     let threshold = first[4];
     let fp: [u8; 8] = first[5..13].try_into().map_err(|_| Error::Format)?;
-    let mut seen = std::collections::BTreeSet::new();
+    // x (the first share byte) -> share bytes; the same share twice counts once, but two different
+    // shares with the same x cannot both be right – that is an error, not a silent choice.
+    let mut seen: std::collections::BTreeMap<u8, &[u8]> = std::collections::BTreeMap::new();
     let mut shares = Vec::new();
     for p in parts {
-        if p.len() < 13 || &p[..4] != MAGIC || p[4] != threshold || p[5..13] != fp {
+        if p.len() < 14 || &p[..4] != MAGIC || p[4] != threshold || p[5..13] != fp {
             return Err(Error::BadShares);
         }
-        let s = Share::try_from(&p[13..]).map_err(|_| Error::Format)?;
-        if seen.insert(p[13]) {
-            shares.push(s);
+        match seen.get(&p[13]) {
+            Some(prev) if *prev != &p[13..] => return Err(Error::BadShares),
+            Some(_) => continue,
+            None => {}
         }
+        shares.push(Share::try_from(&p[13..]).map_err(|_| Error::Format)?);
+        seen.insert(p[13], &p[13..]);
     }
     if shares.len() < threshold as usize {
         return Err(Error::NotEnoughShares(threshold));
     }
-    let secret = Sharks(threshold).recover(shares.iter()).map_err(|_| Error::BadShares)?;
+    // blahaj does not wipe its own buffers (polynomials, shares); the recovered secret is wiped here
+    let secret = Zeroizing::new(Sharks(threshold).recover(shares.iter()).map_err(|_| Error::BadShares)?);
     let bytes: [u8; KEY_LEN] = secret.as_slice().try_into().map_err(|_| Error::BadShares)?;
     let key = Key::from_bytes(bytes);
-    if fingerprint(&key) != fp {
+    // The fingerprint verifies the key – compared in constant time like any other secret-derived value.
+    if !bool::from(fingerprint(&key).ct_eq(&fp)) {
         return Err(Error::BadShares);
     }
     Ok(key)

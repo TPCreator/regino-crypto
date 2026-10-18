@@ -62,6 +62,8 @@ pub enum Error {
     Decrypt,
     #[error("Unknown or corrupted format.")]
     Format,
+    #[error("The context must not be empty.")]
+    EmptyContext,
     #[error("Invalid split: {threshold}-of-{shares} (2 <= threshold <= shares <= 255).")]
     BadSplit { threshold: u8, shares: u8 },
     #[error("Too few shares or duplicate shares – {0} distinct shares are required.")]

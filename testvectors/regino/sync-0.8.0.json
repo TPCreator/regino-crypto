@@ -1,0 +1,27 @@
+{
+  "note": "Made by regino-crypto 0.8.0; test keys only. Must keep working in later versions.",
+  "wrap": {
+    "devicePublic": "BEu/wJg9fYUaQmdDIXZwE3dkbsuP+zlhmBlvcQrvHmhwuPIZWuugGWpiVs0q+LvMmhUzUUBNbbtLZtBlpbXxAPY=",
+    "devicePrivate": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgKN9f2P0Ef7GVsrwtmTa3/+hJavqKyLJsYsEVKzVzSbmhRANCAARLv8CYPX2FGkJnQyF2cBN3ZG7Lj/s5YZgZb3EK7x5ocLjyGVrroBlqYlbNKvi7zJoVM1FATW27S2bQZaW18QD2",
+    "context": "vector|sync|v2",
+    "wrapped": {
+      "v": 2,
+      "e": "BEDLD3l6HOsqM3Ysf50OwFiuAEiTM+lgH9AXQ0QDwxFK9HJqns2Xwu5g0Kkvsyk+uIjX6c0DYrXasVXMEyK5M/U=",
+      "n": "K4DYdTTKtGIbqMfN",
+      "c": "/MRlFSGfnnLd+2I/DhfRrwvMqyJ7gGGjqljEU4kFT/I22B57ebn9vZgNNmAtyf/y"
+    },
+    "groupKey": "//79/Pv6+fj39vX08/Lx8O/u7ezr6uno5+bl5OPi4eA="
+  },
+  "pairingCode": {
+    "devicePublic": "BEu/wJg9fYUaQmdDIXZwE3dkbsuP+zlhmBlvcQrvHmhwuPIZWuugGWpiVs0q+LvMmhUzUUBNbbtLZtBlpbXxAPY=",
+    "code": "614 691"
+  },
+  "sas": {
+    "newPublic": "BEu/wJg9fYUaQmdDIXZwE3dkbsuP+zlhmBlvcQrvHmhwuPIZWuugGWpiVs0q+LvMmhUzUUBNbbtLZtBlpbXxAPY=",
+    "existingPublic": "BPfW9QRbIH8k4+1JHRvBoRZjrfwYKUiOw15aFziLWTbKepETqPfXvlPfVFOAWUBGQgc1lRZNwbT2I2+e1LgT34Q=",
+    "newNonce": "gf3aZZMUfBceZ00AIOXwBA==",
+    "existingNonce": "Q1g1vsk/UREj/gCPVpMQ3A==",
+    "commitment": "fq26rbklU8fOIwX4Gj4qlgI5Fx2/aKvIVvKXzCyWy4k=",
+    "sas": "986 656"
+  }
+}

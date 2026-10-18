@@ -8,13 +8,20 @@
  * - Devices: an ECDH P-256 key pair per device; the private key is created non-extractable and
  *   never leaves the device. The group key is wrapped for a device with an ephemeral ECDH key,
  *   HKDF-SHA256 (salt = both public keys) → AES-256-GCM.
- * - Pairing: the new device shows its public key (e.g. as a QR code); both devices show a short
- *   code derived from it, so people can confirm that the right device was paired. The code guards
- *   against mistakes, not against a server that forwards the key (see `pairingCode`).
+ *   Wrapped keys v2 (since 0.8.0) bind `sync wrap v2|<context>` both as HKDF info and as AAD;
+ *   v1 (bare context as AAD) is still unwrapped.
+ * - Pairing (docs/PAIRING.md): the new device shows its public key as a QR code and the existing
+ *   device scans it; both show `pairingCode` – a guard against scanning the wrong screen. If an app
+ *   ever lets a public key travel through a server, it must use the SAS with a commitment instead
+ *   (`pairingCommitment`, `pairingSas`), which a party in the middle cannot grind.
  */
-import { b64, checkP256Point, ECDH, sealingKey, unb64 } from "./ecdh";
+import { equalBytes, sixDigits } from "./bytes";
+import { b64, checkContext, checkP256Point, ECDH, gcmNonce, sealingKey, unb64 } from "./ecdh";
 
+/** Version of sealed records. */
 export const SYNC_VERSION = 1;
+/** Version of wrapped group keys written by `wrapForDevice` (v1 is still read). */
+export const WRAP_VERSION = 2;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -71,6 +78,7 @@ export async function sealRecord(
   context: string,
   payload: unknown,
 ): Promise<SealedRecord> {
+  checkContext(context, "sync");
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const c = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: nonce, additionalData: recordAad(context) },
@@ -88,11 +96,12 @@ export async function openRecord<T = unknown>(
 ): Promise<T> {
   if (!sealed || sealed.v !== SYNC_VERSION)
     throw new Error("Unsupported sync record version.");
+  checkContext(context, "sync");
   try {
     const plain = await crypto.subtle.decrypt(
       {
         name: "AES-GCM",
-        iv: unb64(sealed.n) as BufferSource,
+        iv: gcmNonce(sealed.n) as BufferSource,
         additionalData: recordAad(context),
       },
       key,
@@ -128,13 +137,9 @@ export interface WrappedGroupKey {
   c: string;
 }
 
-const wrapKey = (
-  privateKey: CryptoKey,
-  otherPublic: Uint8Array,
-  ephemeralPublic: Uint8Array,
-  devicePublic: Uint8Array,
-  context: string,
-) => sealingKey(privateKey, otherPublic, ephemeralPublic, devicePublic, `sync wrap v${SYNC_VERSION}|${context}`);
+// v1: info `sync wrap v1|<context>`, AAD = bare context; v2: `sync wrap v2|<context>` for both.
+const wrapLabel = (v: number, context: string) => `sync wrap v${v}|${context}`;
+const wrapAad = (v: number, context: string) => enc.encode(v === 1 ? context : wrapLabel(v, context));
 
 /** Wraps the group key for one device (its public key from the pairing QR code). */
 export async function wrapForDevice(
@@ -144,25 +149,20 @@ export async function wrapForDevice(
 ): Promise<WrappedGroupKey> {
   checkGroupKey(groupKey);
   checkPublicKey(devicePublic);
+  checkContext(context, "sync");
   const eph = (await crypto.subtle.generateKey(ECDH, false, [
     "deriveBits",
   ])) as CryptoKeyPair;
   const ephPublic = await publicKeyBytes(eph.publicKey);
-  const key = await wrapKey(
-    eph.privateKey,
-    devicePublic,
-    ephPublic,
-    devicePublic,
-    context,
-  );
+  const key = await sealingKey(eph.privateKey, devicePublic, ephPublic, devicePublic, wrapLabel(WRAP_VERSION, context));
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const c = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: nonce, additionalData: enc.encode(context) },
+    { name: "AES-GCM", iv: nonce, additionalData: wrapAad(WRAP_VERSION, context) },
     key,
     groupKey as BufferSource,
   );
   return {
-    v: SYNC_VERSION,
+    v: WRAP_VERSION,
     e: b64(ephPublic),
     n: b64(nonce),
     c: b64(new Uint8Array(c)),
@@ -176,24 +176,20 @@ export async function unwrapForDevice(
   devicePublic: Uint8Array,
   context: string,
 ): Promise<Uint8Array> {
-  if (!wrapped || wrapped.v !== SYNC_VERSION)
+  if (!wrapped || (wrapped.v !== 1 && wrapped.v !== WRAP_VERSION))
     throw new Error("Unsupported wrapped key version.");
+  const v = wrapped.v;
   checkPublicKey(devicePublic);
+  checkContext(context, "sync");
   try {
     const ephPublic = unb64(wrapped.e);
     checkPublicKey(ephPublic);
-    const key = await wrapKey(
-      devicePrivate,
-      ephPublic,
-      ephPublic,
-      devicePublic,
-      context,
-    );
+    const key = await sealingKey(devicePrivate, ephPublic, ephPublic, devicePublic, wrapLabel(v, context));
     const plain = await crypto.subtle.decrypt(
       {
         name: "AES-GCM",
-        iv: unb64(wrapped.n) as BufferSource,
-        additionalData: enc.encode(context),
+        iv: gcmNonce(wrapped.n) as BufferSource,
+        additionalData: wrapAad(v, context),
       },
       key,
       unb64(wrapped.c) as BufferSource,
@@ -206,28 +202,73 @@ export async function unwrapForDevice(
 }
 
 /**
- * Short pairing code (6 digits, "123 456") from a device public key. Both devices show it;
- * if the codes match, the right device was paired.
+ * Short pairing code (6 digits, "123 456") from the new device's public key. Both devices show it;
+ * if the codes match, the right screen was scanned. Unbiased since 0.8.0 (label `sync pairing v2`),
+ * so both devices must use core 0.8.0 or newer.
  *
- * Limits (see AUDIT.md, question 15): 6 digits only stop an accidental mix-up. Whoever carries
- * the public key (e.g. the sync server) can try about a million key pairs and find one with the
- * same code, so the code is not a defence against a malicious server. For that the existing
- * device must take the new device's key out of band (scan its QR code), or the app must compare
- * a long fingerprint.
+ * Limits (AUDIT.md, question 15; docs/PAIRING.md): whoever carries the public key could try about a
+ * million key pairs to find one with the same code, so this code is enough only when the existing
+ * device takes the key straight from the new device's QR code. Otherwise use the SAS below.
  */
 export async function pairingCode(devicePublic: Uint8Array): Promise<string> {
   checkPublicKey(devicePublic);
-  const h = new Uint8Array(
-    await crypto.subtle.digest(
-      "SHA-256",
-      enc.encode(`sync pairing v${SYNC_VERSION}|${b64(devicePublic)}`),
-    ),
-  );
-  const n =
-    (((h[0] as number) << 16) | ((h[1] as number) << 8) | (h[2] as number)) %
-    1_000_000;
-  const digits = String(n).padStart(6, "0");
-  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+  return sixDigits(await sha256(`sync pairing v2|${b64(devicePublic)}`));
+}
+
+const sha256 = async (text: string) => new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text)));
+
+/** A fresh random nonce (16 bytes) for one pairing attempt (`pairingCommitment`, `pairingSas`). */
+export function newPairingNonce(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(16));
+}
+
+function checkNonce(nonce: Uint8Array): void {
+  if (!(nonce instanceof Uint8Array) || nonce.length !== 16) throw new Error("The pairing nonce must have 16 bytes.");
+}
+
+const sasInput = (label: string, newPublic: Uint8Array, existingPublic: Uint8Array, ...nonces: Uint8Array[]) => {
+  checkPublicKey(newPublic);
+  checkPublicKey(existingPublic);
+  nonces.forEach(checkNonce);
+  return [label, b64(newPublic), b64(existingPublic), ...nonces.map(b64)].join("|");
+};
+
+/**
+ * Commitment of the new device to its nonce, sent before it learns the existing device's nonce
+ * (docs/PAIRING.md, SAS flow). Base64 of SHA-256 over both public keys and the nonce.
+ */
+export async function pairingCommitment(newPublic: Uint8Array, existingPublic: Uint8Array, newNonce: Uint8Array): Promise<string> {
+  return b64(await sha256(sasInput("sync pairing commit v1", newPublic, existingPublic, newNonce)));
+}
+
+/** The existing device checks the revealed nonce against the commitment it received first. */
+export async function checkPairingCommitment(
+  commitment: string,
+  newPublic: Uint8Array,
+  existingPublic: Uint8Array,
+  newNonce: Uint8Array,
+): Promise<boolean> {
+  let got: Uint8Array;
+  try {
+    got = unb64(commitment);
+  } catch {
+    return false;
+  }
+  return equalBytes(got, await sha256(sasInput("sync pairing commit v1", newPublic, existingPublic, newNonce)));
+}
+
+/**
+ * Short authentication string over both public keys and both nonces (6 digits). Both devices show
+ * it after the commitment was checked; a party in the middle had to commit before seeing the other
+ * nonce, so it matches for it with probability 10^-6 per attempt.
+ */
+export async function pairingSas(
+  newPublic: Uint8Array,
+  existingPublic: Uint8Array,
+  newNonce: Uint8Array,
+  existingNonce: Uint8Array,
+): Promise<string> {
+  return sixDigits(await sha256(sasInput("sync pairing sas v1", newPublic, existingPublic, newNonce, existingNonce)));
 }
 
 /** Base64 helpers for carrying public keys in QR codes and requests. */

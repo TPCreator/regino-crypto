@@ -225,3 +225,48 @@ fn concurrent_open_with_right_and_wrong_key() {
         t.join().unwrap();
     }
 }
+
+/// Question 7: in WAL mode (the default of `Vault::open`) the WAL file holds encrypted pages too.
+#[test]
+fn wal_file_is_encrypted() {
+    let (_d, path) = tmp();
+    let key = Key::generate().unwrap();
+    let v = Vault::open(&path, &key).unwrap();
+    v.exec("CREATE TABLE t (x TEXT)").unwrap();
+    for _ in 0..50 {
+        v.run("INSERT INTO t VALUES (?)", &[json!("MARKER-PLAINTEXT-1234567890")]).unwrap();
+    }
+    // the connection is still open, so the pages sit in the -wal file (no checkpoint yet)
+    let wal = path.with_file_name("demo.db-wal");
+    let wal_bytes = std::fs::read(&wal).unwrap();
+    assert!(!wal_bytes.is_empty(), "expected a WAL file");
+    for f in [std::fs::read(&path).unwrap(), wal_bytes] {
+        assert!(!f.windows(6).any(|w| w == b"MARKER"), "plaintext readable");
+    }
+}
+
+/// Question 7: `rekey` while the database is in WAL mode with uncheckpointed data.
+#[test]
+fn rekey_in_wal_mode() {
+    let (_d, path) = tmp();
+    let old = Key::generate().unwrap();
+    let new = Key::generate().unwrap();
+    {
+        let v = Vault::open(&path, &old).unwrap();
+        v.exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (7)").unwrap();
+        v.rekey(&new).unwrap();
+        v.exec("INSERT INTO t VALUES (8)").unwrap();
+    }
+    assert!(matches!(Vault::open(&path, &old), Err(Error::WrongKey)));
+    let v = Vault::open(&path, &new).unwrap();
+    assert_eq!(v.all("SELECT count(*) AS n FROM t", &[]).unwrap()[0]["n"], json!(2));
+}
+
+/// Reading ±Inf (or NaN) fails like writing it – it is never turned into null.
+#[test]
+fn non_finite_reals_are_rejected_on_read() {
+    let (_d, v) = open_tmp();
+    assert!(matches!(v.all("SELECT 1e999 AS x", &[]), Err(Error::BadValue(_))));
+    assert!(matches!(v.all("SELECT -1e999 AS x", &[]), Err(Error::BadValue(_))));
+    assert_eq!(v.all("SELECT 1.5 AS x", &[]).unwrap()[0]["x"], json!(1.5));
+}
