@@ -27,6 +27,7 @@ can verify our claims.
 | `vault/` (`regino-vault`) | Rust | `lib.rs`, `keystore.rs`, `backups.rs` | encrypted local SQLite (SQLCipher), DB key in the OS keystore, backup file writing |
 | `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`) | `backup.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts`, `sync.ts`, `inbox.ts`, `ecdh.ts` (shared by sync and inbox) | encrypted backups, recovery phrase (12/24 Slovak words, QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates, sync between devices (sealed records, per-device wrapped group key, pairing code), inbox (anonymous senders seal data to a recipient's public key) |
 | `tools/open-backup.html` | built from `ts/tools/` | | public offline tool that opens any backup with the recovery phrase |
+| `docs/PAIRING.md` | documentation | | how an app must pair a device around `sync.ts` (the public key travels by QR code, not through the server) – the protocol the auditor should read with the code |
 
 Size: about 1 400 lines of non-test code. The commit to review is fixed when the engagement starts
 (apps pin the core to a commit; see `Cargo.toml` / `package.json` of the apps).
@@ -47,7 +48,7 @@ Assets: personal financial records; special-category personal data (e.g. health)
 | The app operator | runs future sync and server, publishes the apps | never able to decrypt user data; no single 2-of-3 share opens a key |
 | Another member of a shared household device | uses the app UI | PIN only stops switching to another user; it is **not** a data-protection boundary |
 | The server in the middle of an inbox (web form → practice) | stores and forwards sealed messages, serves the practice's public key | cannot read messages sealed to the practice's real key. **Not protected by the core alone:** the server can serve its own public key to senders while showing the practice its real key, so the practice's fingerprint check does not notice it; a sender is protected only if they get the fingerprint from the practice out of band (printed, in person, by phone) and compare it – see question 14 and finding 2 in `audits/` (a server that serves malicious page code is out of scope) |
-| The sync server during pairing | forwards the new device's public key to the existing device | **Not protected by the 6-digit pairing code:** the server can find a key pair with the same code in about 10^6 tries, so the code only catches a mix-up. Protection needs the existing device to take the new device's key out of band (QR scan) or to compare a long fingerprint – see question 15 and finding 1 in `audits/` |
+| The sync server during pairing | stores and forwards the wrapped group key; would like to learn or substitute the new device's public key | never sees the public key: the existing device scans it from the new device's QR code (`docs/PAIRING.md`). The 6-digit pairing code only catches a mix-up (a key pair with a given code is found in about 10^6 tries), so an app must not let the key travel through the server – see question 15 and finding 1 in `audits/` |
 | Wrong context / swapped blobs | substitutes one client's wrapped key or sealed record for another | rejected (context is authenticated) |
 
 **Not protected:** malware or an attacker inside the unlocked user session; coerced unlock;
@@ -102,11 +103,12 @@ JavaScript cannot reliably wipe memory. No home-grown primitives.
     origin, publishing hashes of the page code)? The 80-bit fingerprint is meant to be published out
     of band by the practice; is 80 bits enough, and how should the sender's page present it?
 
-15. Pairing (`sync.ts`, `pairingCode`): a 6-digit code derived from the new device's public key
-    alone. We now treat it as a guard against mistakes, not against the server forwarding the key
-    (a key pair with a given 6-digit code is found in about 10^6 tries). Is an out-of-band QR scan
-    of the 65-byte key by the existing device sufficient, or should the code be a SAS over both
-    public keys with a commitment (as in e.g. ZRTP / Signal safety numbers)?
+15. Pairing (`sync.ts`, `pairingCode`, `docs/PAIRING.md`): the existing device scans the new
+    device's public key from its QR code, so the server never carries it; the 6-digit code derived
+    from that key alone is only a guard against scanning the wrong screen (a key pair with a given
+    code is found in about 10^6 tries). Is this sufficient, or should the confirmation be a SAS over
+    both public keys with a commitment (as in e.g. ZRTP / Signal safety numbers) even with the QR
+    transport?
 
 16. Crypto-shredding (`keys/`, README): deleting a client = discarding its wrapped key. Backups
     made before the deletion still carry the wrapped key. Besides deleting or re-creating old

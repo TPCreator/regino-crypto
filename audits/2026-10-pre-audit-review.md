@@ -8,7 +8,7 @@ Severities are ours. A formal auditor should treat these as known and start from
 
 | # | Severity | Where | Finding | Status |
 |---|---|---|---|---|
-| 1 | High | `ts/src/sync.ts` `pairingCode` | 6-digit code over the new device's key alone is forgeable by whoever carries the key | open – protocol, documented |
+| 1 | High | `ts/src/sync.ts` `pairingCode` | 6-digit code over the new device's key alone is forgeable by whoever carries the key | **mitigated**: the app scans the key from the QR code directly, the server never carries it; requirement written down in `docs/PAIRING.md` |
 | 2 | High | `ts/src/inbox.ts` `inboxFingerprint`, AUDIT.md threat model | fingerprint check by the practice does not protect the sender from a server serving a swapped key | open – protocol, documented |
 | 3 | High | `ts/src/sync.ts` `unwrapForDevice` | ephemeral public key and plaintext length not validated | **fixed** |
 | 4 | High | README, `keys/src/lib.rs`, `keys/tests/keys.rs` | "unreadable in all backups too" is false for backups made before the key was discarded; the test only checks a wrong key | docs **fixed**, test and app behaviour open |
@@ -42,10 +42,13 @@ wraps the group key for the attacker's key. The code therefore only catches an a
   (as in ZRTP or Signal safety numbers), so neither side can grind the code after seeing the other key.
 - Or show a long fingerprint (≥ 80 bits, like `inboxFingerprint`) and ask the user to compare it.
 
-**Done now:** the limit is documented in the `pairingCode` doc comment, the `sync.ts` header and
-the AUDIT.md threat model (new row "sync server during pairing") and question 15. The function is
-unchanged so the apps keep working. **Open:** write `docs/PAIRING.md` (who shows what, where the key
-travels), decide the option above, bump `SYNC_VERSION` if the code changes.
+**Status:** the only app using sync (Gazda) already does the first option: the existing device
+scans the new device's QR code, the public key never passes through the server, and the 6-digit code
+is only a confirmation that the right screen was scanned. The limit is documented in the
+`pairingCode` doc comment, the `sync.ts` header, the AUDIT.md threat model (row "sync server during
+pairing"), question 15, and the requirement for apps is now in [`docs/PAIRING.md`](../docs/PAIRING.md).
+The function is unchanged. **Open for the auditor:** whether QR transport plus the 6-digit
+confirmation is enough; a SAS over both keys only if an app ever moves the key through the server.
 
 ## 2. Inbox fingerprint does not protect the sender (High, open)
 
