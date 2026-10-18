@@ -93,7 +93,7 @@ fn aad_binds_magic_and_whole_context() {
     let k = Key::generate().unwrap();
     let inner = Key::generate().unwrap();
     let w = wrap::wrap_key(&k, &inner, b"app/client/1").unwrap();
-    for ctx in [&b"app/client/"[..], b"app/client/10", b"app/client/1\0", b"", b"RGW1app/client/1"] {
+    for ctx in [&b"app/client/"[..], b"app/client/10", b"app/client/1\0", b"RGW1app/client/1"] {
         assert_eq!(wrap::unwrap_key(&k, &w, ctx).unwrap_err(), Error::Decrypt);
     }
     // the same bytes relabelled as a sealed blob (RGS1) do not open: the magic is in the AAD
@@ -168,4 +168,29 @@ fn shamir_coefficients_are_uniform_including_zero() {
     let (min, max) = (counts.iter().min().unwrap(), counts.iter().max().unwrap());
     assert!(*min > 120 && *max < 400, "min {min}, max {max}");
     assert!(counts[0x5a] > 120, "coefficient 0 never drawn");
+}
+
+/// Two different shares with the same x cannot both be right: an error, not a silent choice.
+#[test]
+fn conflicting_shares_with_same_x_are_refused() {
+    let key = Key::generate().unwrap();
+    let parts = shamir::split(&key, 2, 3).unwrap();
+    let mut forged = parts[0].clone();
+    let last = forged.len() - 1;
+    forged[last] ^= 1; // same header and x, other data
+    assert_eq!(shamir::combine(&[parts[0].clone(), forged, parts[1].clone()]).unwrap_err(), Error::BadShares);
+    // the same share twice is still fine
+    assert_eq!(shamir::combine(&[parts[0].clone(), parts[0].clone(), parts[1].clone()]).unwrap(), key);
+}
+
+/// An empty context binds nothing and is refused (like in the TypeScript part).
+#[test]
+fn empty_context_is_refused() {
+    let k = Key::generate().unwrap();
+    assert_eq!(wrap::wrap_key(&k, &k, b"").unwrap_err(), Error::EmptyContext);
+    assert_eq!(wrap::seal(&k, b"x", b"").unwrap_err(), Error::EmptyContext);
+    let w = wrap::wrap_key(&k, &k, b"c").unwrap();
+    assert_eq!(wrap::unwrap_key(&k, &w, b"").unwrap_err(), Error::EmptyContext);
+    let s = wrap::seal(&k, b"x", b"c").unwrap();
+    assert_eq!(wrap::open(&k, &s, b"").unwrap_err(), Error::EmptyContext);
 }

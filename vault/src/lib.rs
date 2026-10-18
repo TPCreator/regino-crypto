@@ -158,9 +158,8 @@ fn from_sql(v: ValueRef<'_>) -> Result<Value, Error> {
     Ok(match v {
         ValueRef::Null => Value::Null,
         ValueRef::Integer(i) => Value::Number(i.into()),
-        ValueRef::Real(f) => Number::from_f64(f)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
+        // NaN and ±Inf have no JSON form; refused like on the way in, never turned into null
+        ValueRef::Real(f) => Number::from_f64(f).map(Value::Number).ok_or_else(|| Error::BadValue(f.to_string()))?,
         ValueRef::Text(t) => Value::String(String::from_utf8_lossy(t).into_owned()),
         ValueRef::Blob(_) => return Err(Error::BadValue("blob".into())),
     })

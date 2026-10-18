@@ -4,6 +4,8 @@
 //! `context` (e.g. `demo/client/01J…`) is authenticated but not stored – so the wrapped key of one
 //! client cannot be passed off as the key of another.
 //!
+//! The context must not be empty (`Error::EmptyContext`) – an empty context binds nothing.
+//!
 //! AAD = `magic || context`. The magic has a fixed length and the context is the only variable
 //! field, so no length prefix is needed: different contexts always give different AAD (question 2 in
 //! AUDIT.md). The caller must build the context itself unambiguously, e.g. `<app>/client/<id>` with
@@ -25,6 +27,9 @@ fn aad(magic: &[u8; 4], context: &[u8]) -> Vec<u8> {
 }
 
 fn encrypt(magic: &[u8; 4], key: &Key, plain: &[u8], context: &[u8]) -> Result<Vec<u8>, Error> {
+    if context.is_empty() {
+        return Err(Error::EmptyContext);
+    }
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::fill(&mut nonce).map_err(|e| Error::Random(e.to_string()))?;
     let cipher = XChaCha20Poly1305::new(key.as_bytes().into());
@@ -39,6 +44,9 @@ fn encrypt(magic: &[u8; 4], key: &Key, plain: &[u8], context: &[u8]) -> Result<V
 }
 
 fn decrypt(magic: &[u8; 4], key: &Key, blob: &[u8], context: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
+    if context.is_empty() {
+        return Err(Error::EmptyContext);
+    }
     if blob.len() < 4 + NONCE_LEN + 16 || &blob[..4] != magic {
         return Err(Error::Format);
     }

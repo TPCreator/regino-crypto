@@ -261,3 +261,12 @@ fn rekey_in_wal_mode() {
     let v = Vault::open(&path, &new).unwrap();
     assert_eq!(v.all("SELECT count(*) AS n FROM t", &[]).unwrap()[0]["n"], json!(2));
 }
+
+/// Reading ±Inf (or NaN) fails like writing it – it is never turned into null.
+#[test]
+fn non_finite_reals_are_rejected_on_read() {
+    let (_d, v) = open_tmp();
+    assert!(matches!(v.all("SELECT 1e999 AS x", &[]), Err(Error::BadValue(_))));
+    assert!(matches!(v.all("SELECT -1e999 AS x", &[]), Err(Error::BadValue(_))));
+    assert_eq!(v.all("SELECT 1.5 AS x", &[]).unwrap()[0]["x"], json!(1.5));
+}
