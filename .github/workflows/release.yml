@@ -28,11 +28,13 @@ jobs:
         run: git diff --exit-code tools/open-backup.html
       - name: Software bills of materials (SBOM)
         run: |
-          cargo install cargo-cyclonedx --locked
+          # SBOM tools pinned exactly: cargo-cyclonedx by version + its own Cargo.lock, cyclonedx-npm as a
+          # devDependency of ts/ (exact version and integrity hash in package-lock.json, installed by npm ci)
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
           cargo cyclonedx --format json
           mkdir dist
           cp vault/regino-vault.cdx.json keys/regino-keys.cdx.json dist/
-          (cd ts && npx --yes @cyclonedx/cyclonedx-npm@4 --output-file ../dist/regino-crypto-ts.cdx.json)
+          (cd ts && npx --no-install cyclonedx-npm --output-file ../dist/regino-crypto-ts.cdx.json)
           cp tools/open-backup.html dist/
           (cd dist && sha256sum * > SHA256SUMS.txt)
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

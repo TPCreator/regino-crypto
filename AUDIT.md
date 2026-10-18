@@ -111,6 +111,12 @@ So in both apps a backup made before a client was deleted contains that client's
 under the backup key; deleting the client reaches only later backups – hence
 `discard_backups_before` and the app's duty to say that copies elsewhere still contain the client.
 
+**Two `Key` types on purpose.** `regino_keys::Key` (keys that wrap and seal) and `regino_vault::Key`
+(the SQLCipher database key) are separate types, so a database key cannot be passed where a wrapping
+key is expected by mistake and vice versa; the app converts explicitly (Dôverník unwraps the DB key
+with `regino-keys` and hands its bytes to `regino-vault`). Both wipe their memory on drop. We may
+unify them later; for now the separation is deliberate.
+
 ### 3.2 Contexts (domain separation)
 
 Every sealed or wrapped object is bound to a context string (AAD, and HKDF info where a key is
@@ -156,6 +162,7 @@ with a test). Question numbers are kept from earlier versions of this brief; tes
 | 7 + 12 | **SQLCipher: raw key, WAL, `rekey`, `cipher_memory_security`.** | The `PRAGMA key` string is `Zeroizing` (rusqlite's C-string copy is not). Wrong key → `sqlite_master` check fails, nothing written. The `-wal` file holds encrypted pages (`wal_file_is_encrypted`); `rekey` works in WAL mode (`rekey_in_wal_mode`). `cipher_memory_security` is OFF: with it ON Windows failed `VirtualLock` (error 1453) and the process crashed; freed SQLite pages are therefore not wiped or locked against paging, key buffers are. We recommend full-disk encryption. Is there a safer setup? | verified – your opinion |
 | 9 | **`backups.rs`** | Names (prefix included) allow only `[A-Za-z0-9_-]` and the app's extension (`prefix_with_path_is_rejected`). Since 0.8.0: `fsync` of the file and, on Unix, of the directory after the rename; the file just written is never pruned (`new_backup_is_never_pruned_even_if_it_sorts_first`); stale `.<name>.tmp` files removed; `discard_backups_before`. | fixed – please review |
 | 10 | **`signed.ts`** | `nbf ≤ at ≤ exp`; the certificate `kid` must match the list entry; roots never come from the list; since 0.8.0 a kid revoked anywhere in the list is dropped everywhere (it was dropped only for that entry) and `verifyWithKeys` never accepts a `typ: "cert"` payload, because the prefix is not signed. | fixed – please review |
+| 13a | **Pairing code bias (fixed).** | Up to 0.7.0 the code was `(24-bit value) mod 10^6`: 2^24 = 16 777 216, so the codes 000 000–777 215 occurred with weight 17 and the rest with weight 16 (about 6 % more likely). Since 0.8.0 (`sync pairing v2`) 32-bit words are rejection-sampled below 4 294 000 000, so all codes are equally likely. | fixed |
 | 13 | **One record key per group, random 96-bit IVs on many devices.** | All devices of a group seal with the same record key and pick random IVs independently; there is no counter or key rotation. A collision needs about 2^48 records for probability 2^-1 (birthday bound), and stays below 2^-33 for 2^32 records; a household or practice writes far fewer. The zero HKDF salt is the case of question 3 (finding 6). Is a limit or rotation needed? | your opinion |
 | 14 | **Inbox.** | Salt = ephemeral ‖ recipient key, context in info and AAD; PKCS#8 export so all devices of a practice can open messages (finding 8); 80-bit fingerprint. Dôverník shows the fingerprint in the form, prints it, checks the published key every 6 h and loads the form script with SRI (finding 2, closed; `docs/INBOX.md`). | your opinion |
 | 15 | **Pairing.** | QR transport + `pairingCode` (unbiased since 0.8.0) for devices side by side; for keys through a server a SAS with a commitment (`pairingCommitment`, `checkPairingCommitment`, `pairingSas`), flow in `docs/PAIRING.md`, fixed vectors. | decided – please review the SAS flow |
@@ -166,6 +173,7 @@ with a test). Question numbers are kept from earlier versions of this brief; tes
 - Tests on every change: `cargo test --workspace`, `cd ts && npx vitest run --coverage` (100 % line, branch and function coverage enforced for the TypeScript part; Rust coverage is not measured yet).
 - Fixed cross-language vectors (Rust ↔ TS) for the recovery key; snapshot of the word list.
 - **Wycheproof** vectors (`testvectors/wycheproof/`): XChaCha20-Poly1305, AES-256-GCM (96-bit IV), HKDF-SHA256, Ed25519, ECDH P-256 with raw points (incl. invalid-curve and wrong-curve attacks) – valid inputs accepted, invalid rejected.
+- The fixed vectors in `testvectors/regino/` (`ecdh-0.6.0.json`, `sync-0.8.0.json`) contain private keys **on purpose**: they are test keys generated only for these vectors (to show that messages and wrapped keys made by older versions still open), never used anywhere else – not a leak.
 - Fixed format vectors that must keep opening in future versions: a backup made by 0.1.0, an inbox message and a v1 wrapped group key made by 0.6.0, a v2 wrapped group key, a pairing code and a SAS made by 0.8.0 (`testvectors/regino/`).
 - **cargo-deny** (`deny.toml`): RustSec advisories, yanked crates, license allow-list, crates.io only. **npm audit** for `ts/`.
 - CI actions pinned to commit hashes, read-only token, `npm ci` and `cargo --locked` against the committed lockfiles. Releases attach CycloneDX SBOMs and SHA-256 checksums; the release build runs with a read-only token and only the upload step has write access.

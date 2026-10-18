@@ -12,6 +12,7 @@
     "build:tool": "node tools/build.mjs"
   },
   "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "6.0.1",
     "@vitest/coverage-v8": "^5.0.4",
     "esbuild": "^0.28.2",
     "jsqr": "^1.4.0",

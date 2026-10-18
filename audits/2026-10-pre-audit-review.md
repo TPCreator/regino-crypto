@@ -146,7 +146,7 @@ Already question 13 in AUDIT.md. The group key is uniformly random, so a zero sa
 
 ## 7. Modulo bias in the pairing code (Low, fixed in 0.8.0)
 
-`(h[0..3] as 24-bit integer) % 1_000_000` is slightly biased. Irrelevant next to finding 1; fix
+`(h[0..3] as 24-bit integer) % 1_000_000` is biased: 2^24 = 16 777 216, so codes 000 000–777 215 have weight 17 and the rest 16 (about 6 % more likely). Irrelevant next to finding 1; fix
 together with it (rejection sampling or 32 bits).
 
 **Done in 0.8.0:** rejection sampling over 32-bit words of the hash (`sixDigits`), label `sync pairing v2`.
