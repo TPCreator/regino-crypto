@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { encryptBackup } from './backup';
+import { assembleChunkedFile, backupChunkKeys, sealBackupChunk } from './backupChunks';
 import { openBackup } from './openBackup';
 import { newRecoverySecret, recoveryQrText, secretToWords } from './recovery';
 
@@ -20,12 +21,25 @@ const OLD_FILE = {
 const data = { items: [{ name: 'test' }] };
 
 describe('independent backup opening', () => {
+  it('backup with large files: lists them and gives the keys to assemble them from the chunk folder', async () => {
+    const secret = newRecoverySecret(12);
+    const keys = await backupChunkKeys(secret, 'dovernik');
+    const c = await sealBackupChunk(keys, new TextEncoder().encode('obsah prílohy'));
+    const payload = { care: { attachments: [{ id: 'a1', name: 'správa.pdf', mime: 'application/pdf', size: 14, chunks: [c.name] }] } };
+    const file = JSON.stringify(await encryptBackup(secret, payload, '2026-10-22T09:00:00.000Z', 'dovernik', [c.name]));
+    const r = await openBackup(file, (await secretToWords(secret)).join(' '));
+    if (!r.ok || !r.chunkKeys) throw new Error('not opened');
+    expect(r.files).toEqual([{ name: 'správa.pdf', mime: 'application/pdf', size: 14, chunks: [c.name] }]);
+    const parts = await assembleChunkedFile(r.chunkKeys, r.files[0]!, async (n) => (n === c.name ? c.blob : null));
+    expect(new TextDecoder().decode(parts[0])).toBe('obsah prílohy');
+  });
+
   it.each([12, 24] as const)('opens backups of different applications based on the header (%i words)', async (n) => {
     const secret = newRecoverySecret(n);
     const words = (await secretToWords(secret)).join(' ');
     for (const app of ['demo', 'other']) {
       const file = JSON.stringify(await encryptBackup(secret, data, '2026-10-16T09:00:00.000Z', app));
-      expect(await openBackup(file, words)).toEqual({ ok: true, app, createdAt: '2026-10-16T09:00:00.000Z', payload: data });
+      expect(await openBackup(file, words)).toEqual({ ok: true, app, createdAt: '2026-10-16T09:00:00.000Z', payload: data, files: [], chunkKeys: null });
     }
   });
 
@@ -75,6 +89,6 @@ describe('independent backup opening', () => {
 
   it('an old backup from version 0.1.0 (24 words) opens', async () => {
     const r = await openBackup(JSON.stringify(OLD_FILE), OLD_WORDS);
-    expect(r).toEqual({ ok: true, app: 'demo', createdAt: '2026-10-16T10:00:00.000Z', payload: { note: 'stará záloha 0.1.0' } });
+    expect(r).toEqual({ ok: true, app: 'demo', createdAt: '2026-10-16T10:00:00.000Z', payload: { note: 'stará záloha 0.1.0' }, files: [], chunkKeys: null });
   });
 });

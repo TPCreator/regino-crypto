@@ -1,4 +1,5 @@
 export * from './backup';
+export * from './backupChunks';
 export * from './openBackup';
 export * from './pin';
 export * from './recovery';

@@ -9,6 +9,7 @@ use serde_json::{Map, Number, Value};
 use std::path::Path;
 use zeroize::Zeroizing;
 
+pub mod backup_chunks;
 pub mod backups;
 pub mod keystore;
 

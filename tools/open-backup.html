@@ -16,13 +16,14 @@
   #out.ok { background: #e3ebdf; } #out.err { background: #f6e1da; color: #8a2c1d; }
   small { color: #666; }
   .sk { margin-top: -8px; color: #555; font-style: italic; }
+  button.link { margin: 4px 0; padding: 0; color: #3f5d45; background: none; font-weight: normal; text-decoration: underline; }
 </style>
 </head>
 <body>
 <h1>Open a backup independently</h1>
 <p lang="sk" class="sk">Slovensky: Otvorte zálohu svojím obnovovacím kódom (12 alebo 24 slov alebo QR kód). Všetko prebieha len vo vašom prehliadači.</p>
 <p>This file opens an encrypted backup from an app that uses the regino-crypto core, using your recovery code (12 or 24 words, or the QR code from the recovery sheet). It runs only in your browser – <b>nothing is sent to the internet</b> (you can open it offline too).</p>
-<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.10.0.</small></p>
+<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.11.0.</small></p>
 <label for="file">Backup file</label>
 <input id="file" type="file" accept=".json,application/json,*/*">
 <label for="words">Recovery code – 12 or 24 words</label>
@@ -32,6 +33,13 @@
 <small id="qrmsg" aria-live="polite">The photo is processed only here in your browser and is not stored anywhere.</small>
 <button id="go">Open</button>
 <div id="out" aria-live="polite"></div>
+<div id="files" hidden>
+  <label for="chunks">Files in the backup – select the chunk folder next to the backup file</label>
+  <p class="sk" lang="sk">Slovensky: prílohy sú v priečinku s kúskami vedľa zálohy (napr. „kusky“) – vyberte ho a kliknite na súbor.</p>
+  <input id="chunks" type="file" webkitdirectory multiple>
+  <ul id="filelist"></ul>
+  <small id="filemsg" aria-live="polite"></small>
+</div>
 <p><small>QR code reading: jsQR (Apache-2.0, github.com/cozmo/jsQR).</small></p>
 <script>"use strict";
 (() => {
@@ -10089,6 +10097,12 @@
 
   // src/ecdh.ts
   var enc = new TextEncoder();
+  function b64(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 32768)
+      s += String.fromCharCode(...bytes.subarray(i, i + 32768));
+    return btoa(s);
+  }
   function unb64(text) {
     const s = atob(text);
     const out = new Uint8Array(s.length);
@@ -10101,14 +10115,78 @@
     return n;
   }
 
-  // src/backup.ts
+  // src/backupChunks.ts
+  var enc2 = new TextEncoder();
+  var MAGIC = enc2.encode("RGB1");
+  var NAME = /^[0-9a-f]{64}$/;
   var APP = /^[a-z][a-z0-9]{1,31}$/;
-  var formatOf = (app) => {
+  var BACKUP_CHUNK_OVERHEAD = 4 + 12 + 16;
+  function info(secret, app, purpose) {
     if (!APP.test(app)) throw new Error("Invalid application name for the backup.");
+    if (secret.length !== 32 && secret.length !== 16) throw new Error("The recovery code must have 12 or 24 words.");
+    return enc2.encode(`${app} backup chunks v1${secret.length === 16 ? " k128" : ""}|${purpose}`);
+  }
+  async function backupChunkKeys(secret, app) {
+    const base = await crypto.subtle.importKey("raw", secret, "HKDF", false, ["deriveKey"]);
+    const hkdf = (purpose) => ({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: info(secret, app, purpose) });
+    return {
+      app,
+      enc: await crypto.subtle.deriveKey(hkdf("enc"), base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]),
+      name: await crypto.subtle.deriveKey(hkdf("name"), base, { name: "HMAC", hash: "SHA-256", length: 256 }, false, ["sign", "verify"])
+    };
+  }
+  var unhex = (s) => Uint8Array.from(s.match(/../g), (h) => parseInt(h, 16));
+  var aad = (app, name) => enc2.encode(`RGB1|${app}|${name}`);
+  async function openBackupChunk(keys, name, blob) {
+    if (!NAME.test(name)) throw new Error("Invalid chunk name.");
+    if (blob.length < BACKUP_CHUNK_OVERHEAD || MAGIC.some((b, i) => blob[i] !== b)) throw new Error("The file is not a backup chunk.");
+    let plain;
+    try {
+      plain = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(4, 16), additionalData: aad(keys.app, name) }, keys.enc, blob.slice(16)));
+    } catch {
+      throw new Error("The code does not belong to this chunk, or the chunk is damaged.");
+    }
+    if (!await crypto.subtle.verify("HMAC", keys.name, unhex(name), plain)) throw new Error("The chunk does not match its name.");
+    return plain;
+  }
+  async function chunkListDigest(chunks) {
+    const list = [...new Set(chunks)].sort();
+    for (const c of list) if (!NAME.test(c)) throw new Error("Invalid chunk name.");
+    return { list, digest: b64(new Uint8Array(await crypto.subtle.digest("SHA-256", enc2.encode(list.join("\n"))))) };
+  }
+  function findChunkedFiles(payload) {
+    const out = [];
+    const walk = (v) => {
+      if (Array.isArray(v)) return v.forEach(walk);
+      if (!v || typeof v !== "object") return;
+      const o = v;
+      if (Array.isArray(o.chunks) && o.chunks.length && o.chunks.every((c) => typeof c === "string" && NAME.test(c))) {
+        out.push({ name: typeof o.name === "string" && o.name ? o.name : "file", mime: typeof o.mime === "string" ? o.mime : void 0, size: typeof o.size === "number" ? o.size : void 0, chunks: o.chunks });
+        return;
+      }
+      Object.values(o).forEach(walk);
+    };
+    walk(payload);
+    return out;
+  }
+  async function assembleChunkedFile(keys, file, read) {
+    const parts = [];
+    for (const name of file.chunks) {
+      const blob = await read(name);
+      if (!blob) throw new Error(`Chunk ${name.slice(0, 12)}\u2026 is missing \u2013 select the whole chunk folder of this backup.`);
+      parts.push(await openBackupChunk(keys, name, blob));
+    }
+    return parts;
+  }
+
+  // src/backup.ts
+  var APP2 = /^[a-z][a-z0-9]{1,31}$/;
+  var formatOf = (app) => {
+    if (!APP2.test(app)) throw new Error("Invalid application name for the backup.");
     return `${app}-backup`;
   };
-  var BACKUP_VERSION = 1;
-  var enc2 = new TextEncoder();
+  var BACKUP_VERSION = 2;
+  var enc3 = new TextEncoder();
   var dec = new TextDecoder();
   function backupInfo(secret, app) {
     if (secret.length === 32) return `${app} backup v1`;
@@ -10116,7 +10194,7 @@
     throw new Error("The recovery code must have 12 or 24 words.");
   }
   async function backupKey(secret, salt, app) {
-    const info = enc2.encode(backupInfo(secret, app));
+    const info2 = enc3.encode(backupInfo(secret, app));
     const base = await crypto.subtle.importKey("raw", secret, "HKDF", false, [
       "deriveKey"
     ]);
@@ -10125,13 +10203,17 @@
         name: "HKDF",
         hash: "SHA-256",
         salt,
-        info
+        info: info2
       },
       base,
       { name: "AES-GCM", length: 256 },
       false,
       ["encrypt", "decrypt"]
     );
+  }
+  async function header(format, version, createdAt, chunks) {
+    if (version < 2) return enc3.encode(`${format}|${version}|${createdAt}`);
+    return enc3.encode(`${format}|${version}|${createdAt}|${(await chunkListDigest(chunks)).digest}`);
   }
   async function decryptBackup(secret, file, app) {
     const f = file;
@@ -10144,16 +10226,18 @@
       const salt = unb64(f.salt);
       if (salt.length !== 16) throw new Error("The salt must have 16 bytes.");
       const key = await backupKey(secret, salt, app);
-      const aad = enc2.encode(`${format}|${f.version}|${f.createdAt}`);
+      if (f.version >= 2 && !(Array.isArray(f.chunks) && f.chunks.every((c) => typeof c === "string"))) throw new Error("Missing chunk list.");
+      const aad2 = await header(format, f.version, f.createdAt, f.chunks ?? []);
       const plain = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: gcmNonce(f.nonce), additionalData: aad },
+        { name: "AES-GCM", iv: gcmNonce(f.nonce), additionalData: aad2 },
         key,
         unb64(f.ciphertext)
       );
       return {
         ok: true,
         payload: JSON.parse(dec.decode(plain)),
-        createdAt: f.createdAt
+        createdAt: f.createdAt,
+        ...f.version >= 2 ? { chunks: f.chunks } : {}
       };
     } catch {
       return { ok: false, error: "wrong-key-or-damaged" };
@@ -12254,8 +12338,8 @@
     }
     const secret = new Uint8Array(BYTES[count]);
     for (let b = 0; b < secret.length; b++) secret[b] = parseInt(bits.slice(b * 8, b * 8 + 8), 2);
-    const enc3 = new TextEncoder();
-    if (!equalBytes(enc3.encode(await checksumBits(secret)), enc3.encode(bits.slice(secret.length * 8))))
+    const enc4 = new TextEncoder();
+    if (!equalBytes(enc4.encode(await checksumBits(secret)), enc4.encode(bits.slice(secret.length * 8))))
       return { ok: false, error: { code: "checksum" } };
     return { ok: true, secret };
   }
@@ -12313,7 +12397,8 @@
         message: r.error === "newer-version" ? "The backup comes from a newer version \u2013 download a newer tool." : "The code does not belong to this backup, or the file is damaged."
       };
     }
-    return { ok: true, app, createdAt: r.createdAt, payload: r.payload };
+    const files = findChunkedFiles(r.payload);
+    return { ok: true, app, createdAt: r.createdAt, payload: r.payload, files, chunkKeys: files.length ? await backupChunkKeys(secret.secret, app) : null };
   }
 
   // tools/page.ts
@@ -12341,7 +12426,45 @@
     a.download = `${r.app}-backup-opened.json`;
     a.textContent = "Download opened data (JSON)";
     out.append(document.createElement("br"), a);
+    if (r.files.length && r.chunkKeys) showFiles(r.files, r.chunkKeys);
   });
+  function showFiles(files, keys) {
+    const box = $("files");
+    box.hidden = false;
+    const list = $("filelist");
+    list.textContent = "";
+    for (const f of files) {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.textContent = `${f.name}${f.size !== void 0 ? ` (${Math.max(1, Math.round(f.size / 1024))} kB)` : ""}`;
+      b.className = "link";
+      b.addEventListener("click", async () => {
+        const dir = [...$("chunks").files ?? []];
+        const byName = new Map(dir.map((x) => [x.name.replace(/\.rgb$/, ""), x]));
+        const msg = $("filemsg");
+        if (!byName.size) {
+          msg.textContent = "First select the chunk folder of the backup.";
+          return;
+        }
+        try {
+          msg.textContent = `Opening ${f.name}\u2026`;
+          const parts = await assembleChunkedFile(keys, f, async (n) => {
+            const x = byName.get(n);
+            return x ? new Uint8Array(await x.arrayBuffer()) : null;
+          });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(new Blob(parts, { type: f.mime ?? "application/octet-stream" }));
+          a.download = f.name;
+          a.click();
+          msg.textContent = `\u2713 ${f.name} opened.`;
+        } catch (e) {
+          msg.textContent = e.message;
+        }
+      });
+      li.append(b);
+      list.append(li);
+    }
+  }
   $("qr").addEventListener("change", async () => {
     const img = $("qr").files?.[0];
     const msg = $("qrmsg");
