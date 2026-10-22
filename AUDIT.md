@@ -20,6 +20,7 @@ question. Changes since the first draft of this brief:
 | 0.8.1 | second review: SBOM tools pinned exactly in the release, `to_hex` / key `PRAGMA` without unwiped copies; no API or format change | `.github/workflows/release.yml`, `vault/src/lib.rs` |
 | 0.10.0 | large files in chunks: XChaCha20-Poly1305 per 4 MiB chunk, AAD `RGC1 \|\| context \|\| index (u64 BE) \|\| last` (STREAM with random nonces – no reordering, swapping or truncation); keyed fingerprint HMAC-SHA256 with an HKDF-derived key for deduplication under one key | `keys/src/chunks.rs` |
 | 0.11.0 | backup chunks: HKDF-SHA256 keys from the recovery code (`<app> backup chunks v1[ k128]\|enc` / `\|name`), name = HMAC-SHA256(content), file `RGB1 ‖ nonce(12) ‖ AES-256-GCM` with AAD `RGB1\|<app>\|<name>`, name re-checked on open; backup v2 lists its chunks in plain text and binds SHA-256 of the sorted list in the AAD; durable chunk writes and age-limited garbage collection. Please check: deterministic names reveal equality of content between backups of one user (by design, for deduplication) and nothing without the code; a changed plain list is detected on opening but could make the app delete chunks (availability only – an attacker with write access could delete them anyway) | `ts/src/backupChunks.ts`, `ts/src/backup.ts`, `keys/src/backup_chunks.rs`, `vault/src/backup_chunks.rs` |
+| 0.11.1 | from an AI-assisted review of client deletion and replay (`audits/2026-10-22-ai-review.md`): `secure_delete` on in `Vault::open`, `Vault::compact()` (`wal_checkpoint(TRUNCATE)` + `VACUUM` + truncate) for the app to call after deleting sensitive rows, `Error::Busy`; documentation now states that freshness, order, replay/rollback protection and tombstones are the app's duty (section 3.3, threat model). No format change | `vault/src/lib.rs`, `vault/tests/vault.rs`, `ts/src/sync.ts`, `audits/` |
 | 0.9.0 | device key for quick unlock: HKDF-SHA256 from a secret the OS releases after the user confirms (Windows Hello signature of a fixed challenge, passkey PRF), info `<app> device-key v1 <method>`, at least 32 bytes; wraps the master key next to the password and recovery wraps | `keys/src/device.rs` |
 
 This document scopes an independent security review of **regino-crypto**, an encryption core
@@ -58,6 +59,8 @@ Assets: personal financial records; special-category personal data (e.g. health)
 | The server in the middle of an inbox (web form → practice) | stores and forwards sealed messages, serves the practice's public key | cannot read messages sealed to the practice's real key. **Not protected by the core alone:** the server can serve its own public key to senders while showing the practice its real key, so the practice's fingerprint check does not notice it; a sender is protected only if they get the fingerprint from the practice out of band (printed, in person, by phone) and compare it – see question 14 and finding 2 in `audits/` (a server that serves malicious page code is out of scope) |
 | The sync server during pairing | stores and forwards the wrapped group key; would like to learn or substitute the new device's public key | with QR transport it never sees the public key: the existing device scans it from the new device's QR code, and the 6-digit `pairingCode` only catches a mix-up. If an app moves keys through the server it must use the SAS with a commitment (since 0.8.0): a party in the middle succeeds with probability 10^-6 per attempt and fails visibly otherwise (`docs/PAIRING.md`, question 15) |
 | Wrong context / swapped blobs | substitutes one client's wrapped key or sealed record for another | rejected (context is authenticated) |
+| Replay or rollback: a sync server, a storage location or a backup copy returns an older – genuine – sealed record, wrapped key or state | substitutes a blob that was valid once for the current one, withholds newer ones, brings back a deleted record or an abandoned group key | **Not protected by the core alone:** the AEAD proves what a blob is and where it belongs, not when; an old blob under the right context still opens. The app must carry freshness, order and deletions in its own payloads – section 3.3 |
+| Remains of deleted rows in the local database file (disk image, recovered free space) – together with the database key, e.g. after a later compromise of the OS keystore | reads the file with the key | `secure_delete` zeroes deleted content inside the pages at delete time; `Vault::compact()`, which the app calls after deleting sensitive data, truncates the WAL and rebuilds the file so old page versions and free pages are gone (since 0.11.1). Without the key the remains are ciphertext like everything else |
 
 **Not protected:** malware or an attacker inside the unlocked user session; coerced unlock;
 side channels on the user's own device beyond what the libraries provide.
@@ -66,7 +69,7 @@ side channels on the user's own device beyond what the libraries provide.
 
 | Function | Construction | Parameters / format |
 |---|---|---|
-| Local DB (Windows) | SQLCipher 4 via `rusqlite` (`bundled-sqlcipher-vendored-openssl`), raw key `PRAGMA key = "x'…'"` | 256-bit random key from `getrandom`, stored in Windows Credential Manager (DPAPI) via `keyring-core`; `cipher_memory_security` left OFF (see question 11); WAL; `rekey` re-encrypts the file |
+| Local DB (Windows) | SQLCipher 4 via `rusqlite` (`bundled-sqlcipher-vendored-openssl`), raw key `PRAGMA key = "x'…'"` | 256-bit random key from `getrandom`, stored in Windows Credential Manager (DPAPI) via `keyring-core`; `cipher_memory_security` left OFF (see question 11); WAL; `secure_delete` ON and `compact()` = `wal_checkpoint(TRUNCATE)` + `VACUUM` after sensitive deletions (since 0.11.1); `rekey` re-encrypts the file |
 | Backups | HKDF-SHA256 → AES-256-GCM (WebCrypto) | IKM = recovery secret (16 or 32 B); salt 16 B random per backup; info `"<app> backup v1"` (32 B secret, legacy) or `"<app> backup v1 k128"` (16 B); IV 96 b random; AAD = `"<app>-backup|<version>|<createdAt>"`; JSON `{format, version, createdAt, salt, nonce, ciphertext}` (base64) |
 | Recovery phrase | BIP-39-like on a fixed Slovak 2048-word list | 128-bit secret + 4-bit checksum = 12 words (default since 0.2.0), or 256 + 8 = 24 words; checksum = leading bits of SHA-256; first 4 letters identify a word, diacritics optional; QR text `RGR1:` + base32(secret ‖ SHA-256[0..2]) |
 | Recovery key (to wrap a master key) | HKDF-SHA256, no salt | info `"<app> recovery-key v1 k128|k256"`; identical in Rust (`recovery_key`) and TS (`recoveryKey`), guarded by fixed cross-language vectors |
@@ -140,6 +143,31 @@ derived). Rules for apps:
    share a shape, e.g. `dovernik/client/<id>` vs. `dovernik/<kind>/<client>/<record>`.
 5. If a field could ever contain arbitrary text, the app must length-prefix it instead (none does today).
 
+### 3.3 What the core does not provide: freshness, order, deletion
+
+The core authenticates content and context (AEAD with the context as AAD, and in HKDF info where a
+key is derived) – nothing more. A sealed record, wrapped key, backup or chunk that was valid once
+stays valid: the core has no notion of time, order or revocation, so it cannot tell a current blob
+from an older genuine one, notice a withheld update, or know that a record was deleted. **These are
+the app's duty**; the auditor should look for them in the apps, not here:
+
+1. **Order and rollback:** a monotonic version in the sealed payload and the hash of the previous
+   state (prev-hash chain), so a device can check that the state it receives follows the one it last
+   saw; a per-device **high-water mark** (the highest version accepted so far) that refuses anything
+   older, kept where a server cannot reset it.
+2. **Key rotation:** a rotation **epoch** in every payload and in the context of wrapped group keys,
+   increased on every rotation; a device refuses to "rotate" back into a group key it has abandoned.
+3. **Deletion:** **tombstones** (a sealed record that says "deleted", kept at least as long as any
+   copy could come back) rather than mere absence, so an older state cannot resurrect a deleted
+   record; locally `secure_delete` and `compact()` (section 3), for backups `discard_backups_before`
+   and the user's awareness of copies elsewhere (question 16).
+4. **What the user sees:** show the creation time bound in the AAD (`createdAt` of a backup) and
+   the device and epoch of the other state in a conflict, so a person can recognise an old state.
+
+Open for the auditor (from `audits/2026-10-22-ai-review.md`): should the core offer an optional
+freshness envelope (sequence, epoch, previous-state hash bound in the AAD) so that each app does not
+build its own?
+
 ## 4. Our answers – please verify
 
 Two parts. **4.1** are questions we answered ourselves; please only confirm. **4.2** are the
@@ -165,7 +193,7 @@ with a test). Question numbers are kept from earlier versions of this brief; tes
 |---|---|---|---|
 | 2 + 17 | **AAD and unambiguous contexts.** Is `magic ‖ context` (Rust) and `sync wrap v2\|<context>` / `sync record v1\|<context>` / `inbox message v1\|<context>` (TS) with the context rules in 3.2 sufficient? | Magic and labels have a fixed form and the context is the only variable field, so different contexts give different AAD (`aad_binds_magic_and_whole_context`); a length prefix would add nothing as long as apps follow 3.2. Wrapped group keys are v2 since 0.8.0 (label in HKDF info and AAD; v1 still read). Empty contexts are refused everywhere since 0.8.0. | fixed (v2, empty) – please review the rules |
 | 6 | **Memory hygiene of Shamir.** | blahaj 0.6 draws coefficients uniformly from 0..=255 (`Uniform::new_inclusive`, `thread_rng`), zero included (`shamir_coefficients_are_uniform_including_zero`). blahaj does not zeroize its polynomials and share buffers; we hash the key without a copy and wrap the recovered secret in `Zeroizing` (0.8.0). GF(256) uses log/exp tables (not constant-time); splitting runs once, locally. Is that acceptable? | verified – your opinion |
-| 7 + 12 | **SQLCipher: raw key, WAL, `rekey`, `cipher_memory_security`.** | The `PRAGMA key` string is `Zeroizing` (rusqlite's C-string copy is not). Wrong key → `sqlite_master` check fails, nothing written. The `-wal` file holds encrypted pages (`wal_file_is_encrypted`); `rekey` works in WAL mode (`rekey_in_wal_mode`). `cipher_memory_security` is OFF: with it ON Windows failed `VirtualLock` (error 1453) and the process crashed; freed SQLite pages are therefore not wiped or locked against paging, key buffers are. We recommend full-disk encryption. Is there a safer setup? | verified – your opinion |
+| 7 + 12 | **SQLCipher: raw key, WAL, `rekey`, `cipher_memory_security`.** | The `PRAGMA key` string is `Zeroizing` (rusqlite's C-string copy is not). Wrong key → `sqlite_master` check fails, nothing written. The `-wal` file holds encrypted pages (`wal_file_is_encrypted`); `rekey` works in WAL mode (`rekey_in_wal_mode`). `cipher_memory_security` is OFF: with it ON Windows failed `VirtualLock` (error 1453) and the process crashed; freed SQLite pages are therefore not wiped or locked against paging, key buffers are. We recommend full-disk encryption. Since 0.11.1 `secure_delete` is ON (`secure_delete_is_on_after_open`) and `compact()` truncates the WAL and rebuilds the file after sensitive deletions (`compact_truncates_wal_and_shrinks_the_file`; `secure_delete_leaves_no_deleted_text_in_a_plaintext_file` shows the effect on a plaintext file, with a control run); between compactions the remains of deleted rows are zeroed inside encrypted pages. Is there a safer setup? | verified – your opinion |
 | 9 | **`backups.rs`** | Names (prefix included) allow only `[A-Za-z0-9_-]` and the app's extension (`prefix_with_path_is_rejected`). Since 0.8.0: `fsync` of the file and, on Unix, of the directory after the rename; the file just written is never pruned (`new_backup_is_never_pruned_even_if_it_sorts_first`); stale `.<name>.tmp` files removed; `discard_backups_before`. | fixed – please review |
 | 10 | **`signed.ts`** | `nbf ≤ at ≤ exp`; the certificate `kid` must match the list entry; roots never come from the list; since 0.8.0 a kid revoked anywhere in the list is dropped everywhere (it was dropped only for that entry) and `verifyWithKeys` never accepts a `typ: "cert"` payload, because the prefix is not signed. | fixed – please review |
 | 13a | **Pairing code bias (fixed).** | Up to 0.7.0 the code was `(24-bit value) mod 10^6`: 2^24 = 16 777 216, so the codes 000 000–777 215 occurred with weight 17 and the rest with weight 16 (about 6 % more likely). Since 0.8.0 (`sync pairing v2`) 32-bit words are rejection-sampled below 4 294 000 000, so all codes are equally likely. | fixed |

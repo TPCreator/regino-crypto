@@ -73,6 +73,8 @@ pub enum Error {
     KeyStore(String),
     #[error("Unsupported value type: {0}")]
     BadValue(String),
+    #[error("The database is being read by another connection; compact it later.")]
+    Busy,
     #[error("{0}")]
     Sql(#[from] rusqlite::Error),
 }
@@ -104,8 +106,42 @@ impl Vault {
         // cipher_memory_security stays OFF (the SQLCipher default): on Windows, locking every SQLite
         // allocation exhausts the working-set quota (VirtualLock error 1453) and the process then dies
         // with a stack overflow. Key buffers are wiped by SQLCipher and by `zeroize` regardless.
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+        // secure_delete (since 0.11.1): deleted content is overwritten with zeros inside the pages
+        // at delete time, so a deleted row does not linger in the free space of the file (`compact`
+        // then removes old page versions and free pages). It is a per-connection setting, hence set
+        // on every open; `secure_delete_is_on_after_open` reads it back.
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA secure_delete = ON;",
+        )?;
         Ok(Vault { conn })
+    }
+
+    /// Removes what deleted rows leave behind in the files. `secure_delete` zeroes deleted content
+    /// inside a page the moment it is deleted, but older versions of the page stay in the `-wal`
+    /// file until the WAL is reused, and the page itself may stay in the file as a free page. This
+    /// checkpoints and truncates the WAL, rebuilds the file (`VACUUM` – only live rows are copied)
+    /// and truncates the WAL again (in WAL mode `VACUUM` writes the rebuilt file through the WAL).
+    ///
+    /// The app calls it after deleting sensitive data (e.g. a client) – not after every change.
+    /// Cost: the whole database is rewritten (time proportional to its size, temporary disk space of
+    /// about twice the file), and the checkpoint needs no other connection reading the file,
+    /// otherwise it cannot finish and `Error::Busy` is returned (nothing is lost – try again later).
+    pub fn compact(&self) -> Result<(), Error> {
+        self.checkpoint_truncate()?;
+        self.conn.execute_batch("VACUUM;")?;
+        self.checkpoint_truncate()
+    }
+
+    /// `PRAGMA wal_checkpoint(TRUNCATE)`: all WAL frames into the file, WAL truncated to zero bytes.
+    /// The first result column is 1 when the checkpoint could not complete (another connection reads).
+    fn checkpoint_truncate(&self) -> Result<(), Error> {
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+        if busy != 0 {
+            return Err(Error::Busy);
+        }
+        Ok(())
     }
 
     pub fn exec(&self, sql: &str) -> Result<(), Error> {
