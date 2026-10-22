@@ -1,6 +1,6 @@
 [package]
 name = "regino-keys"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 description = "Keys for Regino apps: Argon2id from a password, key wrapping (XChaCha20-Poly1305), 2-of-3 splitting (Shamir)"
 authors = ["regino-crypto contributors"]
@@ -13,6 +13,7 @@ chacha20poly1305 = "0.10"
 blahaj = "0.6"
 sha2 = "0.10"
 hkdf = "0.12"
+hmac = "0.12"
 zeroize = "1"
 subtle = "2"
 getrandom = "0.3"
