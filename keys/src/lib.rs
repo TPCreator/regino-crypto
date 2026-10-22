@@ -1,8 +1,10 @@
 //! Keys for apps built on the regino-crypto core.
 //!
 //! - [`kdf`] – key from a password via Argon2id (parameters are stored with the data and can be raised).
+//! - [`chunks`] – large files sealed in chunks (index and final-chunk flag authenticated) and a keyed fingerprint.
 //! - [`wrap`] – wrapping a key with another key and sealing data (XChaCha20-Poly1305, version in the header).
 //! - [`recovery`] – key from a recovery phrase (12 or 24 words) via HKDF-SHA256.
+//! - [`device`] – key from a secret held by the device (Windows Hello signature, passkey PRF) via HKDF-SHA256 – quick unlock.
 //! - [`shamir`] – splitting a key into N shares of which any K suffice (e.g. 2-of-3), with integrity check.
 //!
 //! Deleting data = discarding the wrapped key (crypto-shredding): without it, sealed data
@@ -12,6 +14,8 @@
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
+pub mod chunks;
+pub mod device;
 pub mod kdf;
 pub mod recovery;
 pub mod shamir;
