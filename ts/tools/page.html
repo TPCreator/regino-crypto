@@ -16,6 +16,7 @@
   #out.ok { background: #e3ebdf; } #out.err { background: #f6e1da; color: #8a2c1d; }
   small { color: #666; }
   .sk { margin-top: -8px; color: #555; font-style: italic; }
+  button.link { margin: 4px 0; padding: 0; color: #3f5d45; background: none; font-weight: normal; text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -32,6 +33,13 @@
 <small id="qrmsg" aria-live="polite">The photo is processed only here in your browser and is not stored anywhere.</small>
 <button id="go">Open</button>
 <div id="out" aria-live="polite"></div>
+<div id="files" hidden>
+  <label for="chunks">Files in the backup – select the chunk folder next to the backup file</label>
+  <p class="sk" lang="sk">Slovensky: prílohy sú v priečinku s kúskami vedľa zálohy (napr. „kusky“) – vyberte ho a kliknite na súbor.</p>
+  <input id="chunks" type="file" webkitdirectory multiple>
+  <ul id="filelist"></ul>
+  <small id="filemsg" aria-live="polite"></small>
+</div>
 <p><small>QR code reading: jsQR (Apache-2.0, github.com/cozmo/jsQR).</small></p>
 <script>__SCRIPT__</script>
 </body>

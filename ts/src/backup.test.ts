@@ -70,7 +70,7 @@ describe('encrypted backup', () => {
       error: 'not-backup',
     });
     const file = await encryptBackup(secret, data, undefined, APP);
-    expect(await decryptBackup(secret, { ...file, version: 2 }, APP)).toEqual({
+    expect(await decryptBackup(secret, { ...file, version: 3 }, APP)).toEqual({
       ok: false,
       error: 'newer-version',
     });

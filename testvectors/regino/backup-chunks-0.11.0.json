@@ -1,0 +1,26 @@
+{
+  "description": "Backup chunks (regino-crypto 0.11.0): keys from the recovery code via HKDF-SHA256, name = HMAC-SHA256, file = RGB1|nonce|AES-256-GCM. secret is hex, plain and blob base64.",
+  "chunks": [
+    {
+      "secret": "000102030405060708090a0b0c0d0e0f",
+      "app": "dovernik",
+      "plain": "S8O6c29rIHByw61sb2h5IOKAkyAxMiBzbG92",
+      "name": "8e0de626b070b6da813272631ece9e45f078ea03f28bc40d7648d86d099dae01",
+      "blob": "UkdCMSnJZS7bYwkGzB38nmv1crZg9kmd9ANUkAK2k8DYH45hkbTOUTvY//VFlOZ0Isv11Gfg2YGatwQ="
+    },
+    {
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "app": "dovernik",
+      "plain": "",
+      "name": "36defd58aa375a7db02ac15ddb7ad306a7a2e4968c6c004ae098931c8c4db051",
+      "blob": "UkdCMbjR5mg5zS31sG+m/UlfVZByMxL0VzZvIn0hMAE="
+    },
+    {
+      "secret": "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+      "app": "demo",
+      "plain": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+foAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8w",
+      "name": "862e9fea1e3edb256b9456c5d157bd6a1719298c7c2e6eaa4991cc146fea11a3",
+      "blob": "UkdCMapS3R14KtuRg6S9UXr8O0cep351h34FNmBaCaWSplsMSXtM5qqIWUChoq5sRY23tf9e8KSMMyLgtDLTKKleb6Ag1s8o1IFfo/v8aTdXTsFBNOEgjhN7fSNkSTxUrTa6BkiImjIO6kif3WFYgcZdieZncNs78puk/JLELCba+pFsDkjziScbjmYPmBDfMDXxaF7U5ofuzQCoLaJICI/GJiIRHjulR9oURgOwca7gzcVh/BfbgSa7vs3RnbDdrSuYXEm/Khg38ZG5S18VF3BpFZ3nGs1sOcuE6I0atwaBzCzYGlKOqVRTyYS/OXoRAw0jT41EgPZf6wfhU59c6yRtXXen9U36Fyyv8DoNbaxi7V1MP7827d3TlLB1clXJmt56aVsB5J9nH8IiOxeT3hpDC37cp86NWokpyLmYmeTtBlZTcGd93+HfzSQ="
+    }
+  ]
+}

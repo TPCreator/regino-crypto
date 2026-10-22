@@ -1,4 +1,5 @@
 import { decryptBackup } from './backup';
+import { backupChunkKeys, findChunkedFiles, type BackupChunkKeys, type ChunkedFile } from './backupChunks';
 import { wordsToSecret } from './recovery';
 
 /**
@@ -7,7 +8,16 @@ import { wordsToSecret } from './recovery';
  * Used by the public tool tools/open-backup.html – proof that the applications encrypt with this code.
  */
 export type OpenResult =
-  | { ok: true; app: string; createdAt: string; payload: unknown }
+  | {
+      ok: true;
+      app: string;
+      createdAt: string;
+      payload: unknown;
+      /** large files kept in the chunk folder next to the backup (backupChunks.ts) */
+      files: ChunkedFile[];
+      /** keys for opening those chunks (only when there are files) */
+      chunkKeys: BackupChunkKeys | null;
+    }
   | { ok: false; message: string };
 
 const APP_FORMAT = /^([a-z][a-z0-9]{1,31})-backup$/;
@@ -43,5 +53,6 @@ export async function openBackup(fileText: string, words: string): Promise<OpenR
           : 'The code does not belong to this backup, or the file is damaged.',
     };
   }
-  return { ok: true, app, createdAt: r.createdAt, payload: r.payload };
+  const files = findChunkedFiles(r.payload);
+  return { ok: true, app, createdAt: r.createdAt, payload: r.payload, files, chunkKeys: files.length ? await backupChunkKeys(secret.secret, app) : null };
 }

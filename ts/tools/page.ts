@@ -1,5 +1,6 @@
 // "Open backup" tool page – everything runs in the browser, nothing is sent anywhere.
 import jsQR from 'jsqr';
+import { assembleChunkedFile, type BackupChunkKeys, type ChunkedFile } from '../src/backupChunks';
 import { openBackup } from '../src/openBackup';
 import { parseRecoveryQr } from '../src/recovery';
 
@@ -28,7 +29,47 @@ $('go').addEventListener('click', async () => {
   a.download = `${r.app}-backup-opened.json`;
   a.textContent = 'Download opened data (JSON)';
   out.append(document.createElement('br'), a);
+  if (r.files.length && r.chunkKeys) showFiles(r.files, r.chunkKeys);
 });
+
+// Large files (attachments) are in the chunk folder next to the backup – the user selects that folder.
+function showFiles(files: ChunkedFile[], keys: BackupChunkKeys) {
+  const box = $('files');
+  box.hidden = false;
+  const list = $('filelist');
+  list.textContent = '';
+  for (const f of files) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.textContent = `${f.name}${f.size !== undefined ? ` (${Math.max(1, Math.round(f.size / 1024))} kB)` : ''}`;
+    b.className = 'link';
+    b.addEventListener('click', async () => {
+      const dir = [...($<HTMLInputElement>('chunks').files ?? [])];
+      const byName = new Map(dir.map((x) => [x.name.replace(/\.rgb$/, ''), x]));
+      const msg = $('filemsg');
+      if (!byName.size) {
+        msg.textContent = 'First select the chunk folder of the backup.';
+        return;
+      }
+      try {
+        msg.textContent = `Opening ${f.name}…`;
+        const parts = await assembleChunkedFile(keys, f, async (n) => {
+          const x = byName.get(n);
+          return x ? new Uint8Array(await x.arrayBuffer()) : null;
+        });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob(parts as BlobPart[], { type: f.mime ?? 'application/octet-stream' }));
+        a.download = f.name;
+        a.click();
+        msg.textContent = `✓ ${f.name} opened.`;
+      } catch (e) {
+        msg.textContent = (e as Error).message;
+      }
+    });
+    li.append(b);
+    list.append(li);
+  }
+}
 
 // QR code from a photo of the recovery sheet → text "RGR1:…" into the code field (nothing is sent).
 $('qr').addEventListener('change', async () => {
