@@ -14,6 +14,14 @@
  *   device scans it; both show `pairingCode` – a guard against scanning the wrong screen. If an app
  *   ever lets a public key travel through a server, it must use the SAS with a commitment instead
  *   (`pairingCommitment`, `pairingSas`), which a party in the middle cannot grind.
+ * - Not provided here – the app's duty (AUDIT.md section 3.3): freshness, order, protection against
+ *   replay or rollback, and tombstones. A sealed record or wrapped key opens for as long as the key
+ *   and the context match, whenever it was made; this module cannot tell a current blob from an
+ *   older genuine one, notice a withheld update, or know that a record was deleted. The app puts a
+ *   monotonic version and the hash of the previous state into the sealed payload (prev-hash chain),
+ *   keeps a per-device high-water mark that refuses older versions, carries a rotation epoch in its
+ *   payloads and in the context of wrapped keys (and never rotates back into an abandoned group key),
+ *   and records deletions as tombstones instead of relying on absence.
  */
 import { equalBytes, sixDigits } from "./bytes";
 import { b64, checkContext, checkP256Point, ECDH, gcmNonce, sealingKey, unb64 } from "./ecdh";

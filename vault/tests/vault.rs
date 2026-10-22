@@ -270,3 +270,83 @@ fn non_finite_reals_are_rejected_on_read() {
     assert!(matches!(v.all("SELECT -1e999 AS x", &[]), Err(Error::BadValue(_))));
     assert_eq!(v.all("SELECT 1.5 AS x", &[]).unwrap()[0]["x"], json!(1.5));
 }
+
+/// Finding 4 of the 2026-10-22 review: `secure_delete` is a per-connection setting, so `open` must
+/// turn it on every time – read back on a fresh file and after a reopen.
+#[test]
+fn secure_delete_is_on_after_open() {
+    let (_d, path) = tmp();
+    let key = Key::generate().unwrap();
+    {
+        let v = Vault::open(&path, &key).unwrap();
+        assert_eq!(v.all("PRAGMA secure_delete", &[]).unwrap()[0]["secure_delete"], json!(1));
+    }
+    let v = Vault::open(&path, &key).unwrap();
+    assert_eq!(v.all("PRAGMA secure_delete", &[]).unwrap()[0]["secure_delete"], json!(1));
+    assert_eq!(v.all("PRAGMA journal_mode", &[]).unwrap()[0]["journal_mode"], json!("wal"));
+}
+
+/// `compact` after deleting rows: the WAL is truncated to zero bytes, the file shrinks (free pages
+/// are gone), the data that stayed is intact and the files hold no readable text (they never do –
+/// they are encrypted; what `compact` adds is checked on a plaintext file below).
+#[test]
+fn compact_truncates_wal_and_shrinks_the_file() {
+    let (_d, path) = tmp();
+    let key = Key::generate().unwrap();
+    let wal = path.with_file_name("demo.db-wal");
+    let v = Vault::open(&path, &key).unwrap();
+    v.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, x TEXT)").unwrap();
+    v.run("INSERT INTO t VALUES (?, ?)", &[json!(0), json!("KEEP-ROW")]).unwrap();
+    for i in 1..400 {
+        v.run("INSERT INTO t VALUES (?, ?)", &[json!(i), json!("MARKER-PLAINTEXT-1234567890")]).unwrap();
+    }
+    v.compact().unwrap(); // everything into the file
+    let full = std::fs::metadata(&path).unwrap().len();
+    v.run("DELETE FROM t WHERE id > ?", &[json!(0)]).unwrap();
+    assert!(std::fs::metadata(&wal).unwrap().len() > 0, "the delete should sit in the WAL");
+    v.compact().unwrap();
+    assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0, "WAL not truncated");
+    let compacted = std::fs::metadata(&path).unwrap().len();
+    assert!(compacted < full, "file did not shrink: {compacted} >= {full}");
+    assert_eq!(v.all("SELECT x FROM t", &[]).unwrap()[0]["x"], json!("KEEP-ROW"));
+    for f in [std::fs::read(&path).unwrap(), std::fs::read(&wal).unwrap()] {
+        assert!(!f.windows(6).any(|w| w == b"MARKER"), "plaintext readable");
+    }
+    // a second compact on an already compact file is fine
+    v.compact().unwrap();
+    assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0);
+}
+
+/// What `secure_delete` + `compact` do at page level, shown on a **plaintext** SQLite file (the
+/// vault's own files are encrypted, so a byte search could not tell remains from ciphertext).
+/// The same pragmas and the same steps as `Vault::open` / `Vault::compact`: after one row is deleted
+/// and the WAL is checkpointed, its text is gone from the file and from the WAL. The control run with
+/// `secure_delete = OFF` leaves the text in the file after the same steps – that is what the setting
+/// fixes; `VACUUM` on top removes free pages and old page versions.
+#[test]
+fn secure_delete_leaves_no_deleted_text_in_a_plaintext_file() {
+    fn remains_after_delete(secure_delete: &str, vacuum: bool) -> (bool, bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.db");
+        let wal = dir.path().join("plain.db-wal");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA secure_delete = {secure_delete};
+             CREATE TABLE t (id INTEGER PRIMARY KEY, x TEXT);
+             INSERT INTO t VALUES (1, 'KEEP-ROW');
+             INSERT INTO t VALUES (2, 'MARKER-PLAINTEXT-1234567890');
+             PRAGMA wal_checkpoint(TRUNCATE);
+             DELETE FROM t WHERE id = 2;
+             PRAGMA wal_checkpoint(TRUNCATE);"
+        ))
+        .unwrap();
+        if vacuum {
+            conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+        }
+        let has = |p: &std::path::Path| std::fs::read(p).unwrap().windows(6).any(|w| w == b"MARKER");
+        (has(&path), has(&wal))
+    }
+    assert_eq!(remains_after_delete("OFF", false), (true, false), "control: without secure_delete the text stays");
+    assert_eq!(remains_after_delete("ON", false), (false, false), "secure_delete alone");
+    assert_eq!(remains_after_delete("ON", true), (false, false), "secure_delete + compact steps");
+}
