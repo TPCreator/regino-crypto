@@ -122,10 +122,27 @@ impl Vault {
     /// checkpoints and truncates the WAL, rebuilds the file (`VACUUM` – only live rows are copied)
     /// and truncates the WAL again (in WAL mode `VACUUM` writes the rebuilt file through the WAL).
     ///
+    /// Scope: this cleans the live database file and WAL only. Truncating a file frees its blocks
+    /// without overwriting them, so old WAL frames and old free pages can remain in the free space
+    /// of the file system, on an SSD or in shadow copies – encrypted under the database key. That is
+    /// out of scope; full-disk encryption is recommended (`AUDIT.md`, question 7 + 12).
+    ///
     /// The app calls it after deleting sensitive data (e.g. a client) – not after every change.
-    /// Cost: the whole database is rewritten (time proportional to its size, temporary disk space of
-    /// about twice the file), and the checkpoint needs no other connection reading the file,
-    /// otherwise it cannot finish and `Error::Busy` is returned (nothing is lost – try again later).
+    /// Cost: the whole database is rewritten (time proportional to its size). The temporary copy
+    /// that `VACUUM` builds is held in memory (the bundled SQLCipher is built with
+    /// `SQLITE_TEMP_STORE=2`), so it needs RAM of about the size of the database; on disk the WAL
+    /// grows to about the size of the database until the final checkpoint truncates it.
+    ///
+    /// - `VACUUM` may renumber the `rowid` of tables without an explicit `INTEGER PRIMARY KEY`;
+    ///   do not keep references to such rows by bare `rowid`.
+    /// - Do not call it inside an open transaction (e.g. after `exec("BEGIN")`): `VACUUM` then
+    ///   fails with `Error::Sql` ("cannot VACUUM from within a transaction"), not `Error::Busy`.
+    /// - Each checkpoint needs no other connection reading the file; it waits up to the busy
+    ///   timeout (about 5 s, the rusqlite default) and then returns `Error::Busy` (nothing is lost –
+    ///   try again later). If the second checkpoint returns `Error::Busy`, `VACUUM` has already
+    ///   finished and the rebuilt database is in the WAL (encrypted); the WAL stays large until the
+    ///   next successful checkpoint (e.g. the next `compact()`).
+    /// - Because it can block for seconds, do not call it on the UI thread.
     pub fn compact(&self) -> Result<(), Error> {
         self.checkpoint_truncate()?;
         self.conn.execute_batch("VACUUM;")?;
