@@ -163,6 +163,52 @@ describe('recovery sheet QR code', () => {
     expect(parseRecoveryQr('aréna jednota')).toBeNull();
     await expect(recoveryQrText(new Uint8Array(8))).rejects.toThrow();
   });
+
+  it('fixed QR texts (canonical base32) encode and decode unchanged', async () => {
+    const s16 = Uint8Array.from({ length: 16 }, (_, i) => i);
+    const s32 = Uint8Array.from({ length: 32 }, (_, i) => i * 7 + 3);
+    expect(await recoveryQrText(s16)).toBe('RGR1:AAAQEAYEAUDAOCAJBIFQYDIOB67EK');
+    expect(await recoveryQrText(s32)).toBe('RGR1:AMFBCGA7EYWTIO2CJFIFOXTFNRZXVAMIR6LJ3JFLWK44BR6O2XOKWXY');
+    for (const [s, text] of [
+      [s16, 'RGR1:AAAQEAYEAUDAOCAJBIFQYDIOB67EK'],
+      [s32, 'RGR1:AMFBCGA7EYWTIO2CJFIFOXTFNRZXVAMIR6LJ3JFLWK44BR6O2XOKWXY'],
+    ] as const) {
+      const r = await wordsToSecret(text);
+      expect(r.ok && hex(r.secret)).toBe(hex(s));
+    }
+  });
+
+  // 0.12.1: one secret has exactly one QR text. Before, a trailing character (whose bits fell beyond
+  // the last whole byte) or non-zero padding bits decoded to the same bytes and were accepted.
+  it.each([12, 24] as const)('%i words: only the canonical base32 text is accepted', async (n) => {
+    const secret = newRecoverySecret(n);
+    const text = await recoveryQrText(secret);
+    const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    const last = B32.indexOf(text[text.length - 1] as string);
+    // 12 words: 145 bits = 18 bytes + 1 padding bit; 24 words: 275 bits = 34 bytes + 3 padding bits
+    const paddingBits = n === 12 ? 1 : 3;
+    for (let flip = 1; flip < 1 << paddingBits; flip++) {
+      const nonCanonical = text.slice(0, -1) + B32[last ^ flip];
+      expect(await wordsToSecret(nonCanonical), nonCanonical).toEqual({ ok: false, error: { code: 'qr' } });
+    }
+    // the padding bits are the only difference – flipping a data bit of the last character is still caught
+    expect(await wordsToSecret(text.slice(0, -1) + B32[last ^ (1 << paddingBits)])).toEqual({ ok: false, error: { code: 'qr' } });
+    // a trailing character, one character missing, or the length of the other strength
+    expect(await wordsToSecret(`${text}A`)).toEqual({ ok: false, error: { code: 'qr' } });
+    expect(await wordsToSecret(text.slice(0, -1))).toEqual({ ok: false, error: { code: 'qr' } });
+    // padded to the length of the other strength the syntax passes, the check bytes then fail
+    expect(await wordsToSecret(`${text}${'A'.repeat(n === 12 ? 26 : 29)}`.slice(0, 5 + (n === 12 ? 55 : 29)))).toEqual({ ok: false, error: { code: 'qr' } });
+    expect(parseRecoveryQr('RGR1:')).toEqual({ ok: false });
+    // characters outside A–Z, 2–7 at the right length (0, 1, 8, 9 and punctuation are not base32)
+    for (const ch of ['!', '0', '1', '8', '9', '='])
+      expect(parseRecoveryQr(`RGR1:${'A'.repeat(28)}${ch}`), ch).toEqual({ ok: false });
+    expect(parseRecoveryQr(`RGR1:${'A'.repeat(28)}`)).toEqual({ ok: false });
+    expect(parseRecoveryQr(`RGR1:${'A'.repeat(30)}`)).toEqual({ ok: false });
+    expect(parseRecoveryQr(`RGR1:${'A'.repeat(29)}`)).toMatchObject({ ok: true });
+    expect(parseRecoveryQr(`RGR1:${'A'.repeat(55)}`)).toMatchObject({ ok: true });
+    // the canonical text itself still passes (and so does its lower-case form)
+    expect((await wordsToSecret(text)).ok).toBe(true);
+  });
 });
 
 describe('key from the recovery code', () => {

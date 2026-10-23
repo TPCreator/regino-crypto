@@ -23,7 +23,7 @@
 <h1>Open a backup independently</h1>
 <p lang="sk" class="sk">Slovensky: Otvorte zálohu svojím obnovovacím kódom (12 alebo 24 slov alebo QR kód). Všetko prebieha len vo vašom prehliadači.</p>
 <p>This file opens an encrypted backup from an app that uses the regino-crypto core, using your recovery code (12 or 24 words, or the QR code from the recovery sheet). It runs only in your browser – <b>nothing is sent to the internet</b> (you can open it offline too).</p>
-<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.12.0.</small></p>
+<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.12.1.</small></p>
 <label for="file">Backup file</label>
 <input id="file" type="file" accept=".json,application/json,*/*">
 <label for="words">Recovery code – 12 or 24 words</label>
@@ -10186,6 +10186,7 @@
     return `${app}-backup`;
   };
   var BACKUP_VERSION = 2;
+  var BACKUP_VERSIONS = [1, 2];
   var enc3 = new TextEncoder();
   var dec = new TextDecoder();
   function backupInfo(secret, app) {
@@ -10220,14 +10221,15 @@
     const format = formatOf(app);
     if (!f || f.format !== format || typeof f.ciphertext !== "string" || typeof f.salt !== "string" || typeof f.nonce !== "string" || typeof f.createdAt !== "string")
       return { ok: false, error: "not-backup" };
-    if (typeof f.version !== "number" || f.version > BACKUP_VERSION)
-      return { ok: false, error: "newer-version" };
+    const version = f.version;
+    if (Number.isInteger(version) && version > BACKUP_VERSION) return { ok: false, error: "newer-version" };
+    if (typeof version !== "number" || !BACKUP_VERSIONS.includes(version)) return { ok: false, error: "not-backup" };
     try {
       const salt = unb64(f.salt);
       if (salt.length !== 16) throw new Error("The salt must have 16 bytes.");
       const key = await backupKey(secret, salt, app);
-      if (f.version >= 2 && !(Array.isArray(f.chunks) && f.chunks.every((c) => typeof c === "string"))) throw new Error("Missing chunk list.");
-      const aad2 = await header(format, f.version, f.createdAt, f.chunks ?? []);
+      if (version >= 2 && !(Array.isArray(f.chunks) && f.chunks.every((c) => typeof c === "string"))) throw new Error("Missing chunk list.");
+      const aad2 = await header(format, version, f.createdAt, f.chunks ?? []);
       const plain = await crypto.subtle.decrypt(
         { name: "AES-GCM", iv: gcmNonce(f.nonce), additionalData: aad2 },
         key,
@@ -10237,7 +10239,7 @@
         ok: true,
         payload: JSON.parse(dec.decode(plain)),
         createdAt: f.createdAt,
-        ...f.version >= 2 ? { chunks: f.chunks } : {}
+        ...version >= 2 ? { chunks: f.chunks } : {}
       };
     } catch {
       return { ok: false, error: "wrong-key-or-damaged" };
@@ -12345,15 +12347,19 @@
   }
   var QR_PREFIX = "RGR1:";
   var B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  var QR_LENGTHS = { 29: 18, 55: 34 };
   function unbase32(text) {
+    const len = QR_LENGTHS[text.length];
+    if (!len) return null;
     let bits = "";
     for (const ch of text) {
       const v = B32.indexOf(ch);
       if (v < 0) return null;
       bits += v.toString(2).padStart(5, "0");
     }
-    const out = new Uint8Array(Math.floor(bits.length / 8));
-    for (let b = 0; b < out.length; b++) out[b] = parseInt(bits.slice(b * 8, b * 8 + 8), 2);
+    if (/[^0]/.test(bits.slice(len * 8))) return null;
+    const out = new Uint8Array(len);
+    for (let b = 0; b < len; b++) out[b] = parseInt(bits.slice(b * 8, b * 8 + 8), 2);
     return out;
   }
   async function sha2(bytes) {
@@ -12363,7 +12369,7 @@
     const t = input.trim().toUpperCase();
     if (!t.startsWith(QR_PREFIX)) return null;
     const raw = unbase32(t.slice(QR_PREFIX.length));
-    if (!raw || raw.length !== 18 && raw.length !== 34) return { ok: false };
+    if (!raw) return { ok: false };
     return { ok: true, secret: raw.slice(0, -2), check: raw.slice(-2) };
   }
 
