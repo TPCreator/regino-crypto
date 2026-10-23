@@ -1,5 +1,12 @@
 name: ci
-on: [push, pull_request]
+# One run per change (2026-10-19): push only to main + pull requests (before: every push and the PR = 2x), not for documentation.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
+  pull_request:
+    paths-ignore: ['docs/**', '**/*.md']
+  workflow_dispatch:
 
 # Minimal permissions; actions pinned to a commit (not a tag) so they cannot be silently swapped.
 permissions:
@@ -17,9 +24,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with: { toolchain: stable, components: clippy }
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo test --workspace (including Wycheproof vectors)
@@ -44,7 +51,7 @@ jobs:
       DENY_VERSION: 0.20.2
       DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - name: cargo-deny (pinned version, verified checksum)
         run: |
@@ -58,9 +65,9 @@ jobs:
     timeout-minutes: 15
     defaults: { run: { working-directory: ts } }
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 22 }
       - run: npm ci --no-audit --no-fund
       - name: Vulnerable packages (npm audit)

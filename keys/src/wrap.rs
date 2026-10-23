@@ -13,7 +13,7 @@
 
 use crate::{Error, Key, KEY_LEN};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use chacha20poly1305::XChaCha20Poly1305;
 use zeroize::Zeroizing;
 
 const WRAP_MAGIC: &[u8; 4] = b"RGW1";
@@ -34,7 +34,7 @@ fn encrypt(magic: &[u8; 4], key: &Key, plain: &[u8], context: &[u8]) -> Result<V
     getrandom::fill(&mut nonce).map_err(|e| Error::Random(e.to_string()))?;
     let cipher = XChaCha20Poly1305::new(key.as_bytes().into());
     let ct = cipher
-        .encrypt(XNonce::from_slice(&nonce), Payload { msg: plain, aad: &aad(magic, context) })
+        .encrypt(&nonce.into(), Payload { msg: plain, aad: &aad(magic, context) })
         .map_err(|_| Error::Decrypt)?;
     let mut out = Vec::with_capacity(4 + NONCE_LEN + ct.len());
     out.extend_from_slice(magic);
@@ -50,9 +50,10 @@ fn decrypt(magic: &[u8; 4], key: &Key, blob: &[u8], context: &[u8]) -> Result<Ze
     if blob.len() < 4 + NONCE_LEN + 16 || &blob[..4] != magic {
         return Err(Error::Format);
     }
+    let nonce: &[u8; NONCE_LEN] = blob[4..4 + NONCE_LEN].try_into().map_err(|_| Error::Format)?;
     let cipher = XChaCha20Poly1305::new(key.as_bytes().into());
     cipher
-        .decrypt(XNonce::from_slice(&blob[4..4 + NONCE_LEN]), Payload { msg: &blob[4 + NONCE_LEN..], aad: &aad(magic, context) })
+        .decrypt(nonce.into(), Payload { msg: &blob[4 + NONCE_LEN..], aad: &aad(magic, context) })
         .map(Zeroizing::new)
         .map_err(|_| Error::Decrypt)
 }

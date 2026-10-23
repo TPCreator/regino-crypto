@@ -17,9 +17,9 @@
 
 use crate::{Error, Key};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use chacha20poly1305::XChaCha20Poly1305;
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit as _, Mac};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -54,7 +54,7 @@ pub fn seal_chunk(key: &Key, context: &[u8], index: u64, last: bool, data: &[u8]
     getrandom::fill(&mut nonce).map_err(|e| Error::Random(e.to_string()))?;
     let cipher = XChaCha20Poly1305::new(key.as_bytes().into());
     let ct = cipher
-        .encrypt(XNonce::from_slice(&nonce), Payload { msg: data, aad: &aad(context, index, last) })
+        .encrypt(&nonce.into(), Payload { msg: data, aad: &aad(context, index, last) })
         .map_err(|_| Error::Decrypt)?;
     let mut out = Vec::with_capacity(OVERHEAD + data.len());
     out.extend_from_slice(MAGIC);
@@ -72,9 +72,10 @@ pub fn open_chunk(key: &Key, context: &[u8], index: u64, last: bool, blob: &[u8]
     if blob.len() < OVERHEAD || &blob[..4] != MAGIC {
         return Err(Error::Format);
     }
+    let nonce: &[u8; NONCE_LEN] = blob[4..4 + NONCE_LEN].try_into().map_err(|_| Error::Format)?;
     let cipher = XChaCha20Poly1305::new(key.as_bytes().into());
     cipher
-        .decrypt(XNonce::from_slice(&blob[4..4 + NONCE_LEN]), Payload { msg: &blob[4 + NONCE_LEN..], aad: &aad(context, index, last) })
+        .decrypt(nonce.into(), Payload { msg: &blob[4 + NONCE_LEN..], aad: &aad(context, index, last) })
         .map(Zeroizing::new)
         .map_err(|_| Error::Decrypt)
 }
@@ -92,7 +93,7 @@ impl Fingerprint {
         Hkdf::<Sha256>::new(None, key.as_bytes())
             .expand_multi_info(&[b"regino fingerprint v1|", context], fk.as_mut())
             .map_err(|_| Error::Format)?;
-        let mac = <Hmac<Sha256> as Mac>::new_from_slice(fk.as_ref()).map_err(|_| Error::Format)?;
+        let mac = Hmac::<Sha256>::new_from_slice(fk.as_ref()).map_err(|_| Error::Format)?;
         Ok(Fingerprint(mac))
     }
     pub fn update(&mut self, data: &[u8]) {

@@ -2,7 +2,7 @@
 //! `recovery` rely on must accept valid inputs and reject invalid ones.
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use chacha20poly1305::XChaCha20Poly1305;
 use hkdf::Hkdf;
 use serde_json::Value;
 use sha2::Sha256;
@@ -29,16 +29,16 @@ fn xchacha20_poly1305() {
         let id = &t["tcId"];
         let key: [u8; 32] = hex(&t["key"]).try_into().unwrap();
         let cipher = XChaCha20Poly1305::new(&key.into());
-        let nonce = hex(&t["iv"]);
+        let nonce: [u8; 24] = hex(&t["iv"]).try_into().unwrap();
         let aad = hex(&t["aad"]);
         let msg = hex(&t["msg"]);
         let mut sealed = hex(&t["ct"]);
         sealed.extend(hex(&t["tag"]));
-        let opened = cipher.decrypt(XNonce::from_slice(&nonce), Payload { msg: &sealed, aad: &aad });
+        let opened = cipher.decrypt(&nonce.into(), Payload { msg: &sealed, aad: &aad });
         match t["result"].as_str() {
             Some("valid") => {
                 assert_eq!(opened.as_deref(), Ok(msg.as_slice()), "tcId {id}");
-                let enc = cipher.encrypt(XNonce::from_slice(&nonce), Payload { msg: &msg, aad: &aad });
+                let enc = cipher.encrypt(&nonce.into(), Payload { msg: &msg, aad: &aad });
                 assert_eq!(enc.as_deref(), Ok(sealed.as_slice()), "tcId {id}");
             }
             _ => assert!(opened.is_err(), "invalid input accepted: tcId {id}"),
