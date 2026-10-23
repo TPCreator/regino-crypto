@@ -22,6 +22,7 @@ question. Changes since the first draft of this brief:
 | 0.11.0 | backup chunks: HKDF-SHA256 keys from the recovery code (`<app> backup chunks v1[ k128]\|enc` / `\|name`), name = HMAC-SHA256(content), file `RGB1 ‖ nonce(12) ‖ AES-256-GCM` with AAD `RGB1\|<app>\|<name>`, name re-checked on open; backup v2 lists its chunks in plain text and binds SHA-256 of the sorted list in the AAD; durable chunk writes and age-limited garbage collection. Please check: deterministic names reveal equality of content between backups of one user (by design, for deduplication) and nothing without the code; a changed plain list is detected on opening but could make the app delete chunks (availability only – an attacker with write access could delete them anyway) | `ts/src/backupChunks.ts`, `ts/src/backup.ts`, `keys/src/backup_chunks.rs`, `vault/src/backup_chunks.rs` |
 | 0.11.1 | from an AI-assisted review of client deletion and replay (`audits/2026-10-22-ai-review.md`): `secure_delete` on in `Vault::open`, `Vault::compact()` (`wal_checkpoint(TRUNCATE)` + `VACUUM` + truncate) for the app to call after deleting sensitive rows, `Error::Busy`; documentation now states that freshness, order, replay/rollback protection and tombstones are the app's duty (section 3.3, threat model). No format change | `vault/src/lib.rs`, `vault/tests/vault.rs`, `ts/src/sync.ts`, `audits/` |
 | 0.12.0 | dependencies updated, API/format unchanged: `argon2` 0.5→0.6, `chacha20poly1305` 0.10→0.11, `aes-gcm` 0.10→0.11, `sha2` 0.10→0.11, `hkdf` 0.12→0.13, `hmac` 0.12→0.13 (one `digest` 0.11 / `aead` 0.6 generation, `hybrid-array` instead of `generic-array`), `blahaj` 0.6→0.7 (only `rand` 0.8→0.10 inside; field tables and share layout identical), `getrandom` 0.3→0.4; TypeScript 7 (dev); CI actions. Code: nonces passed as fixed-size arrays, HMAC keys via `KeyInit::new_from_slice` – no change to what is computed. New compatibility test with vectors made by 0.11.1 (wrap, seal, chunks, fingerprint, Argon2id, HKDF keys, Shamir shares) | `keys/Cargo.toml`, `vault/Cargo.toml`, `Cargo.lock`, `keys/src/wrap.rs`, `keys/src/chunks.rs`, `keys/src/backup_chunks.rs`, `keys/tests/compat_0_11_1.rs`, `testvectors/regino/keys-0.11.1.json`, `.github/workflows/` |
+| 0.12.1 | hardening after an external AI review (section 4.3): Shamir shares must have exactly 46 bytes (`SHARE_LEN`); `keystore::rekey` + `finish_rekey` change the database key and the keystore entry through a pending entry, so a crash in between never leaves a key that opens nothing; QR recovery text only in canonical base32 (29 or 55 characters, zero padding bits); backup `version` exactly 1 or 2 (`BACKUP_VERSIONS`); PIN hash: 1 ≤ iterations ≤ 10 000 000 (`MAX_PIN_ITERATIONS`), salt 16 B and hash 32 B exactly; certificates must have `v: 1`; `verifyWithKeys` states that time is the caller's and takes an optional `at` (`nbf`/`exp`); `peekToken` no longer exported. **No format change** – every fixed vector and `compat_0_11_1` pass untouched | `keys/src/shamir.rs`, `vault/src/keystore.rs`, `ts/src/recovery.ts`, `ts/src/backup.ts`, `ts/src/pin.ts`, `ts/src/signed.ts`, tests |
 | 0.9.0 | device key for quick unlock: HKDF-SHA256 from a secret the OS releases after the user confirms (Windows Hello signature of a fixed challenge, passkey PRF), info `<app> device-key v1 <method>`, at least 32 bytes; wraps the master key next to the password and recovery wraps | `keys/src/device.rs` |
 
 This document scopes an independent security review of **regino-crypto**, an encryption core
@@ -70,7 +71,7 @@ side channels on the user's own device beyond what the libraries provide.
 
 | Function | Construction | Parameters / format |
 |---|---|---|
-| Local DB (Windows) | SQLCipher 4 via `rusqlite` (`bundled-sqlcipher-vendored-openssl`), raw key `PRAGMA key = "x'…'"` | 256-bit random key from `getrandom`, stored in Windows Credential Manager (DPAPI) via `keyring-core`; `cipher_memory_security` left OFF (see question 11); WAL; `secure_delete` ON and `compact()` = `wal_checkpoint(TRUNCATE)` + `VACUUM` after sensitive deletions (since 0.11.1); `rekey` re-encrypts the file |
+| Local DB (Windows) | SQLCipher 4 via `rusqlite` (`bundled-sqlcipher-vendored-openssl`), raw key `PRAGMA key = "x'…'"` | 256-bit random key from `getrandom`, stored in Windows Credential Manager (DPAPI) via `keyring-core`; `cipher_memory_security` left OFF (see question 11); WAL; `secure_delete` ON and `compact()` = `wal_checkpoint(TRUNCATE)` + `VACUUM` after sensitive deletions (since 0.11.1); `rekey` re-encrypts the file – through `keystore::rekey` (pending entry `<user>.pending` → `PRAGMA rekey` → main entry → pending removed) and `keystore::finish_rekey` at startup, so a crash between the file and the keystore leaves a key that opens the file (since 0.12.1) |
 | Backups | HKDF-SHA256 → AES-256-GCM (WebCrypto) | IKM = recovery secret (16 or 32 B); salt 16 B random per backup; info `"<app> backup v1"` (32 B secret, legacy) or `"<app> backup v1 k128"` (16 B); IV 96 b random; AAD = `"<app>-backup|<version>|<createdAt>"`; JSON `{format, version, createdAt, salt, nonce, ciphertext}` (base64) |
 | Recovery phrase | BIP-39-like on a fixed Slovak 2048-word list | 128-bit secret + 4-bit checksum = 12 words (default since 0.2.0), or 256 + 8 = 24 words; checksum = leading bits of SHA-256; first 4 letters identify a word, diacritics optional; QR text `RGR1:` + base32(secret ‖ SHA-256[0..2]) |
 | Recovery key (to wrap a master key) | HKDF-SHA256, no salt | info `"<app> recovery-key v1 k128|k256"`; identical in Rust (`recovery_key`) and TS (`recoveryKey`), guarded by fixed cross-language vectors |
@@ -164,6 +165,16 @@ the app's duty**; the auditor should look for them in the apps, not here:
    and the user's awareness of copies elsewhere (question 16).
 4. **What the user sees:** show the creation time bound in the AAD (`createdAt` of a backup) and
    the device and epoch of the other state in a conflict, so a person can recognise an old state.
+5. **Removing a device (revocation):** a `SealedRecord` carries no epoch and a `WrappedGroupKey`
+   cannot be revoked – by design, the format stays as it is. The app rotates the group key when a
+   device is removed: Dôverník seals a *rotate notice* under the **old** group key (context
+   `…|rotate`, with the new group id, the epoch and hashes of the new wrapped keys), wraps the new
+   key for every remaining device (context with the device id and epoch), carries `epoch`,
+   `old_groups` and `removed_devices` in every sealed state and refuses a notice whose epoch does not
+   increase. **Known remainder:** the removed device still holds the old group key; together with a
+   server that keeps or replays old blobs it can read everything sealed under that key before the
+   rotation (and nothing after). That is inherent to end-to-end encryption without a trusted server
+   and is accepted; what the core guarantees is only that the new key never reaches the removed device.
 
 Open for the auditor (from `audits/2026-10-22-ai-review.md`): should the core offer an optional
 freshness envelope (sequence, epoch, previous-state hash bound in the AAD) so that each app does not
@@ -202,6 +213,30 @@ with a test). Question numbers are kept from earlier versions of this brief; tes
 | 14 | **Inbox.** | Salt = ephemeral ‖ recipient key, context in info and AAD; PKCS#8 export so all devices of a practice can open messages (finding 8); 80-bit fingerprint. Dôverník shows the fingerprint in the form, prints it, checks the published key every 6 h and loads the form script with SRI (finding 2, closed; `docs/INBOX.md`). | your opinion |
 | 15 | **Pairing.** | QR transport + `pairingCode` (unbiased since 0.8.0) for devices side by side; for keys through a server a SAS with a commitment (`pairingCommitment`, `checkPairingCommitment`, `pairingSas`), flow in `docs/PAIRING.md`, fixed vectors. | decided – please review the SAS flow |
 | 16 | **Crypto-shredding vs. older backups.** | No key epoch: a backup must open with the recovery phrase alone, so anything it needs is derivable from the phrase or inside it; today's backups are plain JSON under the backup key (3.1). Instead `discard_backups_before` and the app's duty to tell the user about copies elsewhere (`shredding_reaches_only_backups_made_after_deletion`). | decided – your opinion |
+
+### 4.3 External AI review (2026-10-23) – what was fixed in 0.12.1
+
+An AI assistant reviewed the repository on the maintainer's computer (possibly an older checkout);
+every point was first checked against 0.12.0 and the apps that use the core (Dôverník, Gazda;
+Žiačik and regino-obchod do not use it). Status: **fixed** in 0.12.1, **already** = was already so
+(in an earlier version), **as designed** = deliberately different, documented.
+
+| Point | Status | Note |
+|---|---|---|
+| `shamir.rs`: hash the key without `concat()` (unwiped copy) | already (0.8.0) | `Sha256::new().chain_update(label).chain_update(key)` |
+| `shamir.rs`: recovered secret in `Zeroizing` | already (0.8.0) | |
+| `shamir.rs`: fingerprint compared in constant time | already (0.8.0) | `subtle::ConstantTimeEq` |
+| `shamir.rs`: exact share length instead of `len < 13` | **fixed** | `SHARE_LEN` = 46 for every share (checked against the 2-of-3 and 3-of-5 vectors of 0.11.1); first share → `Error::Format`, others → `Error::BadShares` |
+| `wrap.rs`: refuse an empty context with `Error::Format` | already (0.8.0), as designed | refused since 0.8.0 with its own `Error::EmptyContext` (a programming error, not corrupt data); both apps have run on that rule since, so no data with an empty context exists |
+| `Vault::rekey` + `store_key` not atomic | **fixed** | `keystore::rekey` (pending entry → rekey → main entry → remove pending) and `keystore::finish_rekey` at startup; neither app calls `rekey` today (Dôverník also keeps the DB key wrapped in its key file; Gazda never changes the key), so this is for the day they do |
+| `recovery.ts`: exact base32 length and zero padding bits | **fixed** | 29 / 55 characters, padding bits must be zero; fixed QR texts added as vectors, the 0.1.0 backup and all existing QR tests pass |
+| `backup.ts`: `version` exactly a supported one, salt 16 B, nonce 12 B | **fixed** (version) / already (salt, nonce since 0.8.0) | `BACKUP_VERSIONS = [1, 2]`; an integer above 2 is `newer-version`, anything else `not-backup` (`'x'` used to be reported as newer) |
+| `sync.ts`, `inbox.ts`: nonce exactly 12 B; empty context in `sync.ts` | already (0.8.0) | `gcmNonce` and `checkContext` in `ecdh.ts` are used by both; explicit tests added |
+| `pin.ts`: upper bound on iterations, exact salt and hash length | **fixed** | `MAX_PIN_ITERATIONS` = 10 000 000 (apps store 200 000), salt 32 hex, hash 64 hex, exactly four fields; also enforced by `hashPin` |
+| `signed.ts`: `verifyCertificate` requires `v: 1` | **fixed** | the format has always had `v: 1` (regino-obchod `LICENCIE-TOKENY.md`) |
+| `signed.ts`: `verifyWithKeys` – expiry is the caller's | **fixed** (docs + optional `at`) | licence tokens have no `exp` by design (`valid_to` + `grace_days` decide); optional `at` checks `nbf`/`exp` when present; without `at` nothing changes for the apps |
+| `signed.ts`: `peekToken` | **fixed** (removed) | no app used it; internal only (to pick the `kid`), nothing read without a signature is exported |
+| `SealedRecord`: device revocation / epoch | as designed | format unchanged; the app's duty and the known remainder are in section 3.3 item 5 |
 
 ## 5. Existing assurance
 
