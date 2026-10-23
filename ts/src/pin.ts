@@ -48,7 +48,10 @@ export async function hashPin(pin: string, iterations = ITERATIONS): Promise<str
   return `pbkdf2$${iterations}$${hex(salt)}$${await derive(pin, salt, iterations)}`;
 }
 
-/** False for a wrong PIN and for any stored value that is not exactly `pbkdf2$<1..MAX>$<32 hex>$<64 hex>`. */
+/**
+ * False for a wrong PIN and for any stored value that is not exactly `pbkdf2$<1..MAX>$<32 hex>$<64 hex>`
+ * – the iteration count in its one canonical form (digits, no leading zeros, as `hashPin` writes it).
+ */
 export async function verifyPin(pin: string, stored: string): Promise<boolean> {
   const parts = stored.split('$');
   if (parts.length !== 4) return false;
@@ -56,7 +59,7 @@ export async function verifyPin(pin: string, stored: string): Promise<boolean> {
   const iterations = Number(iter);
   if (
     kind !== 'pbkdf2' ||
-    !/^\d+$/.test(iter) ||
+    !/^[1-9]\d*$/.test(iter) ||
     !validIterations(iterations) ||
     !SALT_HEX.test(salt) ||
     !HASH_HEX.test(hash)

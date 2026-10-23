@@ -44,6 +44,11 @@ describe('PIN', () => {
     expect(await verifyPin('2580', withIter('+1000'))).toBe(false);
     expect(await verifyPin('2580', withIter('1000.0'))).toBe(false);
     expect(await verifyPin('2580', withIter(''))).toBe(false);
+    // one canonical spelling only: no leading zeros (`hashPin` never writes them – see the default
+    // `200000` above, as Gazda stores it)
+    expect(await verifyPin('2580', withIter('01000'))).toBe(false);
+    expect(await verifyPin('2580', withIter('0'))).toBe(false);
+    expect(await verifyPin('2580', withIter('00'))).toBe(false);
     // salt: exactly 32 hex characters; hash: exactly 64
     expect(await verifyPin('2580', `pbkdf2$1000$${salt.slice(2)}$${hash}`)).toBe(false);
     expect(await verifyPin('2580', `pbkdf2$1000$${salt}00$${hash}`)).toBe(false);

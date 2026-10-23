@@ -7,6 +7,34 @@ fn tmp() -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, path)
 }
 
+/// Second review of 0.12.1: `WrongKey` only for SQLITE_NOTADB (wrong key or not an encrypted
+/// database). A file that cannot be read at all – here held under an exclusive lock by another
+/// connection, as another process would – is `Error::Sql`, whatever key is tried, because it says
+/// nothing about the key (`keystore::finish_rekey` relies on this).
+#[test]
+fn unreadable_file_is_not_reported_as_a_wrong_key() {
+    let (dir, path) = tmp();
+    let key = Key::generate().unwrap();
+    Vault::open(&path, &key).unwrap().exec("CREATE TABLE t (x INTEGER)").unwrap();
+    {
+        let holder = rusqlite::Connection::open(&path).unwrap();
+        holder
+            .execute_batch(&format!(
+                "PRAGMA key = \"x'{}'\"; PRAGMA locking_mode = EXCLUSIVE; BEGIN IMMEDIATE; INSERT INTO t VALUES (1);",
+                key.to_hex().as_str()
+            ))
+            .unwrap();
+        // waits for the busy timeout (5 s) and then reports the lock, not a wrong key
+        assert!(matches!(Vault::open(&path, &Key::generate().unwrap()), Err(Error::Sql(_))));
+        drop(holder);
+    }
+    assert!(Vault::open(&path, &key).is_ok());
+    // a file that is not an encrypted database (readable, but not ours) is still `WrongKey`
+    let plain = dir.path().join("plain.db");
+    std::fs::write(&plain, b"this is not a database, just some text that is longer than a page header").unwrap();
+    assert!(matches!(Vault::open(&plain, &key), Err(Error::WrongKey)));
+}
+
 #[test]
 fn writes_and_reads_back_after_reopen() {
     let (_d, path) = tmp();

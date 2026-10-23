@@ -75,6 +75,11 @@ pub enum Error {
     BadValue(String),
     #[error("The database is being read by another connection; compact it later.")]
     Busy,
+    /// `keystore::rekey`: the file already has the new key, but the keystore could not be updated
+    /// (step 3 or 4). The change is **not** failed – do not try the old or another key; restart the
+    /// app (`keystore::finish_rekey` completes it) or call `finish_rekey` directly. Since 0.12.1.
+    #[error("The database already has the new key, but the keystore was not updated ({0}); restart the app to complete the change.")]
+    RekeyIncomplete(String),
     #[error("{0}")]
     Sql(#[from] rusqlite::Error),
 }
@@ -85,6 +90,9 @@ pub struct Vault {
 
 impl Vault {
     /// Opens (or creates) the encrypted file. A wrong key returns `Error::WrongKey` and overwrites nothing.
+    /// `WrongKey` means only that: the file could be read but is not an encrypted database under this
+    /// key. A file that cannot be read at all (locked by another process, I/O error, damaged) is
+    /// `Error::Sql` – it says nothing about the key.
     pub fn open(path: &Path, key: &Key) -> Result<Vault, Error> {
         let conn = Connection::open_with_flags(
             path,
@@ -94,14 +102,24 @@ impl Vault {
         )?;
         let pragma = key_pragma("key", key);
         conn.execute_batch(&pragma)?;
-        // Key check: with a wrong key SQLCipher reports "file is not a database".
-        if conn
-            .query_row("SELECT count(*) FROM sqlite_master", [], |r| {
-                r.get::<_, i64>(0)
-            })
-            .is_err()
-        {
-            return Err(Error::WrongKey);
+        // Key check: with a wrong key (or a file that is not an encrypted database) SQLCipher reports
+        // SQLITE_NOTADB "file is not a database" – only that is `WrongKey`. Any other failure here (the
+        // file is locked by another process, an I/O error, a damaged file) is `Error::Sql`, so a caller
+        // that decides about keys (`keystore::finish_rekey`) never takes it for a wrong key (since
+        // 0.12.1; before, every failure of this check was reported as `WrongKey`).
+        if let Err(e) = conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        }) {
+            return Err(match e {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ErrorCode::NotADatabase,
+                        ..
+                    },
+                    _,
+                ) => Error::WrongKey,
+                other => Error::Sql(other),
+            });
         }
         // cipher_memory_security stays OFF (the SQLCipher default): on Windows, locking every SQLite
         // allocation exhausts the working-set quota (VirtualLock error 1453) and the process then dies
