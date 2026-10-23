@@ -183,6 +183,35 @@ fn conflicting_shares_with_same_x_are_refused() {
     assert_eq!(shamir::combine(&[parts[0].clone(), parts[0].clone(), parts[1].clone()]).unwrap(), key);
 }
 
+/// 0.12.1: every share has exactly `SHARE_LEN` (46) bytes – for any threshold and share count.
+/// A share with a byte missing or appended is refused, even when the appended byte would not change
+/// the recovered key; the first share decides the format error, the others are "bad shares".
+#[test]
+fn shares_have_one_fixed_length_and_other_lengths_are_refused() {
+    assert_eq!(shamir::SHARE_LEN, 46);
+    let key = Key::generate().unwrap();
+    for (t, n) in [(2u8, 3u8), (3, 5), (5, 5), (2, 2)] {
+        for s in shamir::split(&key, t, n).unwrap() {
+            assert_eq!(s.len(), shamir::SHARE_LEN, "{t}-of-{n}");
+        }
+    }
+    let parts = shamir::split(&key, 2, 3).unwrap();
+    let mut longer = parts[1].clone();
+    longer.push(0);
+    let mut shorter = parts[1].clone();
+    shorter.pop();
+    // header only (13 bytes) and header + x without y
+    let header = parts[1][..13].to_vec();
+    let header_x = parts[1][..14].to_vec();
+    for bad in [&longer, &shorter, &header, &header_x] {
+        assert_eq!(shamir::combine(&[bad.clone(), parts[0].clone()]).unwrap_err(), Error::Format, "first: {}", bad.len());
+        assert_eq!(shamir::combine(&[parts[0].clone(), bad.clone()]).unwrap_err(), Error::BadShares, "second: {}", bad.len());
+        assert_eq!(shamir::combine(&[parts[0].clone(), parts[2].clone(), bad.clone()]).unwrap_err(), Error::BadShares);
+    }
+    // the untouched shares still combine
+    assert_eq!(shamir::combine(&[parts[0].clone(), parts[1].clone()]).unwrap(), key);
+}
+
 /// An empty context binds nothing and is refused (like in the TypeScript part).
 #[test]
 fn empty_context_is_refused() {

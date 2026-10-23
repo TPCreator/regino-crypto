@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decryptBackup, encryptBackup } from './backup';
+import { BACKUP_VERSION, BACKUP_VERSIONS, decryptBackup, encryptBackup } from './backup';
 import { newRecoverySecret } from './recovery';
 
 const APP = 'demo';
@@ -74,10 +74,19 @@ describe('encrypted backup', () => {
       ok: false,
       error: 'newer-version',
     });
-    expect(await decryptBackup(secret, { ...file, version: 'x' }, APP)).toEqual({
-      ok: false,
-      error: 'newer-version',
-    });
+    // 0.12.1: only the versions this code writes or wrote (1, 2) are read; a value that is not a
+    // known version and not an integer above the highest one is not a backup at all
+    expect(BACKUP_VERSIONS).toEqual([1, 2]);
+    expect(BACKUP_VERSION).toBe(Math.max(...BACKUP_VERSIONS));
+    for (const version of ['x', '1', 0, -1, 1.5, NaN, Infinity, null, undefined, true, [1]])
+      expect(await decryptBackup(secret, { ...file, version }, APP), String(version)).toEqual({
+        ok: false,
+        error: 'not-backup',
+      });
+    expect(await decryptBackup(secret, { ...file, version: 99 }, APP)).toEqual({ ok: false, error: 'newer-version' });
+    // version 1 opens (version 2 is covered with the chunk list)
+    expect(file.version).toBe(1);
+    expect((await decryptBackup(secret, file, APP)).ok).toBe(true);
   });
 
   it("does not open another application's backup and validates the application name", async () => {

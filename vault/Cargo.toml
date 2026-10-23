@@ -1,6 +1,6 @@
 [package]
 name = "regino-vault"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2021"
 description = "Encrypted local database (SQLCipher) with the key in the OS keystore – shared by Regino apps"
 authors = ["regino-crypto contributors"]

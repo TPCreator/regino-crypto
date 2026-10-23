@@ -81,6 +81,9 @@ describe("inbox", () => {
     };
     await expect(openFromInbox(key, CTX, { ...FIXED.m, c: flip(FIXED.m.c) })).rejects.toThrow(err);
     await expect(openFromInbox(key, CTX, { ...FIXED.m, n: flip(FIXED.m.n) })).rejects.toThrow(err);
+    // the nonce must have exactly 12 bytes (checked before WebCrypto is asked)
+    for (const n of ["elevenbytes", "thirteenbytes", ""])
+      await expect(openFromInbox(key, CTX, { ...FIXED.m, n: btoa(n) }), `${n.length} bytes`).rejects.toThrow(err);
     await expect(openFromInbox(key, CTX, { ...FIXED.m, e: flip(FIXED.m.e) })).rejects.toThrow(err);
     await expect(openFromInbox(key, CTX, { ...FIXED.m, e: btoa("short") })).rejects.toThrow(err);
     await expect(openFromInbox(key, CTX, { ...FIXED.m, v: 2 })).rejects.toThrow(/version/);

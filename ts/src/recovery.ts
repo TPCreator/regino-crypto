@@ -117,15 +117,25 @@ function base32(bytes: Uint8Array): string {
   return out;
 }
 
+/** Base32 text length → byte count: 18 B (12 words + 2 check bytes) = 29 characters, 34 B (24 words) = 55. */
+const QR_LENGTHS: Readonly<Record<number, number>> = { 29: 18, 55: 34 };
+
+/**
+ * Canonical base32 only (since 0.12.1): exactly 29 or 55 characters and the padding bits after the
+ * last byte all zero – one secret has one QR text, trailing characters or non-zero padding are refused.
+ */
 function unbase32(text: string): Uint8Array | null {
+  const len = QR_LENGTHS[text.length];
+  if (!len) return null;
   let bits = '';
   for (const ch of text) {
     const v = B32.indexOf(ch);
     if (v < 0) return null;
     bits += v.toString(2).padStart(5, '0');
   }
-  const out = new Uint8Array(Math.floor(bits.length / 8));
-  for (let b = 0; b < out.length; b++) out[b] = parseInt(bits.slice(b * 8, b * 8 + 8), 2);
+  if (/[^0]/.test(bits.slice(len * 8))) return null;
+  const out = new Uint8Array(len);
+  for (let b = 0; b < len; b++) out[b] = parseInt(bits.slice(b * 8, b * 8 + 8), 2);
   return out;
 }
 
@@ -151,7 +161,7 @@ export function parseRecoveryQr(
   const t = input.trim().toUpperCase();
   if (!t.startsWith(QR_PREFIX)) return null;
   const raw = unbase32(t.slice(QR_PREFIX.length));
-  if (!raw || (raw.length !== 18 && raw.length !== 34)) return { ok: false };
+  if (!raw) return { ok: false };
   return { ok: true, secret: raw.slice(0, -2), check: raw.slice(-2) };
 }
 

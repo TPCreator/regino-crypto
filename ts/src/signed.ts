@@ -63,11 +63,14 @@ function parse(json: Uint8Array): Payload | null {
   }
 }
 
-/** Prefix and payload WITHOUT checking the signature – only to find `kid` and `typ`. */
-export function peekToken(token: string): { prefix: string; payload: Payload } | null {
+/**
+ * Payload WITHOUT checking the signature – internal, only to pick the key (`kid`) a token names
+ * before the signature is verified with that key. Not exported since 0.12.1: nothing read here may
+ * be trusted, and no app needs it (they go through `verifyWithKeys` / `verifyCertificate`).
+ */
+function peek(token: string): Payload | null {
   const t = split(token);
-  const payload = t && parse(t.json);
-  return t && payload ? { prefix: t.prefix, payload } : null;
+  return t && parse(t.json);
 }
 
 /** Ed25519 signature check with strict RFC 8032 rules; false for any malformed input. */
@@ -100,19 +103,20 @@ const time = (v: unknown): v is number => typeof v === 'number' && Number.isInte
 
 /**
  * Verifies a key certificate against the built-in roots at time `at` (seconds since 1970, UTC) and
- * returns the certified key, or null.
+ * returns the certified key, or null. Only certificate format `v: 1` is accepted (since 0.12.1 –
+ * a certificate of a future format is not read as if it were this one).
  */
 export async function verifyCertificate(
   cert: string,
   roots: readonly RootKey[],
   at: number,
 ): Promise<CertifiedKey | null> {
-  const root = roots.find((r) => r.kid === peekToken(cert)?.payload.kid);
+  const root = roots.find((r) => r.kid === peek(cert)?.kid);
   const v = root ? await verifyToken(cert, root.pub) : null;
   if (!v || v.prefix !== CERT_PREFIX) return null;
   const p = v.payload;
   const s = p.subject as Payload | null | undefined;
-  if (p.typ !== 'cert' || !time(p.nbf) || p.nbf > at) return null;
+  if (p.v !== 1 || p.typ !== 'cert' || !time(p.nbf) || p.nbf > at) return null;
   if (p.exp !== null && p.exp !== undefined && (!time(p.exp) || p.exp < at)) return null;
   if (!s || typeof s !== 'object' || !str(s.kid) || !str(s.use) || !str(s.pub)) return null;
   if (s.product !== null && s.product !== undefined && !str(s.product)) return null;
@@ -145,6 +149,14 @@ export async function certifiedKeys(
  * Verifies a token signed by a certified key for `product` and `use`: the `kid` in the payload must
  * name such a key, and `product` in the payload must match. Returns the payload or null.
  *
+ * **What is checked here:** signature, prefix, `product`, `use` of the signing key, and that the
+ * payload is not a certificate. **What the caller checks:** everything else in the payload – `typ`,
+ * `v`, and the token's validity in time. Licence tokens carry no `exp` by design (`valid_to`,
+ * `grace_days` and the product's rules decide), device tokens carry `exp`. If `at` (seconds since
+ * 1970, UTC) is given, a payload with `nbf` after `at` or `exp` before `at` is refused – fields that
+ * are absent (or `exp: null`) impose no bound, malformed ones refuse the token; without `at`
+ * nothing about time is checked.
+ *
  * The prefix is not covered by the signature (it only names the token kind), so the payload decides:
  * a certificate payload (`typ: "cert"`) is never accepted here, even if a key were ever used both as
  * a root and as a product key (question 10).
@@ -153,10 +165,16 @@ export async function verifyWithKeys(
   token: string,
   keys: readonly CertifiedKey[],
   expect: { prefix: string; product: string; use: string },
+  at?: number,
 ): Promise<Payload | null> {
-  const kid = peekToken(token)?.payload.kid;
+  const kid = peek(token)?.kid;
   const key = keys.find((k) => k.kid === kid && k.product === expect.product && k.use === expect.use);
   const v = key ? await verifyToken(token, key.pub) : null;
   if (!v || v.prefix !== expect.prefix || v.payload.product !== expect.product || v.payload.typ === 'cert') return null;
-  return v.payload;
+  const p = v.payload;
+  if (at !== undefined) {
+    if (p.nbf !== undefined && p.nbf !== null && (!time(p.nbf) || p.nbf > at)) return null;
+    if (p.exp !== undefined && p.exp !== null && (!time(p.exp) || p.exp < at)) return null;
+  }
+  return p;
 }

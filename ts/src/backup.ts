@@ -14,6 +14,8 @@ const formatOf = (app: string) => {
 };
 /** Highest version this code reads. 1 = payload only; 2 = also a plain list of chunk names (backupChunks.ts) bound in the AAD. */
 export const BACKUP_VERSION = 2;
+/** Exactly the versions this code reads (since 0.12.1 checked as a set, not as `<= BACKUP_VERSION`). */
+export const BACKUP_VERSIONS: readonly number[] = [1, 2];
 
 export interface EncryptedBackup {
   /** `<app>-backup` */
@@ -126,14 +128,17 @@ export async function decryptBackup<T = unknown>(
     typeof f.createdAt !== 'string'
   )
     return { ok: false, error: 'not-backup' };
-  if (typeof f.version !== 'number' || f.version > BACKUP_VERSION)
-    return { ok: false, error: 'newer-version' };
+  // An integer above the highest known version is a newer file; anything else that is not a known
+  // version (0, a fraction, NaN, a string) is not a backup of this code.
+  const version = f.version;
+  if (Number.isInteger(version) && (version as number) > BACKUP_VERSION) return { ok: false, error: 'newer-version' };
+  if (typeof version !== 'number' || !BACKUP_VERSIONS.includes(version)) return { ok: false, error: 'not-backup' };
   try {
     const salt = unb64(f.salt);
     if (salt.length !== 16) throw new Error('The salt must have 16 bytes.');
     const key = await backupKey(secret, salt, app);
-    if (f.version >= 2 && !(Array.isArray(f.chunks) && f.chunks.every((c) => typeof c === 'string'))) throw new Error('Missing chunk list.');
-    const aad = await header(format, f.version, f.createdAt, f.chunks ?? []);
+    if (version >= 2 && !(Array.isArray(f.chunks) && f.chunks.every((c) => typeof c === 'string'))) throw new Error('Missing chunk list.');
+    const aad = await header(format, version, f.createdAt, f.chunks ?? []);
     const plain = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: gcmNonce(f.nonce) as BufferSource, additionalData: aad as BufferSource },
       key,
@@ -143,7 +148,7 @@ export async function decryptBackup<T = unknown>(
       ok: true,
       payload: JSON.parse(dec.decode(plain)) as T,
       createdAt: f.createdAt,
-      ...(f.version >= 2 ? { chunks: f.chunks } : {}),
+      ...(version >= 2 ? { chunks: f.chunks } : {}),
     };
   } catch {
     return { ok: false, error: 'wrong-key-or-damaged' };

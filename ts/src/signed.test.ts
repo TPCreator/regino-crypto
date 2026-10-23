@@ -1,10 +1,10 @@
 import { getPublicKeyAsync, signAsync, utils } from '@noble/ed25519';
 import { describe, expect, it } from 'vitest';
 import ed25519 from '../../testvectors/wycheproof/ed25519_test.json';
+import * as signed from './signed';
 import {
   certifiedKeys,
   fromBase64url,
-  peekToken,
   verifyCertificate,
   verifySignature,
   verifyToken,
@@ -74,9 +74,10 @@ describe('signed tokens', () => {
     const [head, body, sig] = token.split('.') as [string, string, string];
     const other = await sign('DM', { v: 1, typ: 'lic', n: 'X' }, k.secret);
     expect(await verifyToken(`${head}.${other.split('.')[1]}.${sig}`, k.pub)).toBeNull();
-    expect(await verifyToken(`XX1.${body}.${sig}`, k.pub)).not.toBeNull(); // prefix is not signed …
-    expect(peekToken(`XX1.${body}.${sig}`)?.prefix).toBe('XX'); // … callers check it
+    expect((await verifyToken(`XX1.${body}.${sig}`, k.pub))?.prefix).toBe('XX'); // prefix is not signed – callers check it
     expect(await verifyToken(token, (await keyPair()).pub)).toBeNull();
+    // 0.12.1: no way to read a payload without a signature check is exported
+    expect('peekToken' in signed).toBe(false);
   });
 
   it('malformed tokens and keys', async () => {
@@ -93,7 +94,6 @@ describe('signed tokens', () => {
       `DM1.${body}.AAAA`,
       `DM1.${body}+.${sig}`,
     ]) {
-      expect(peekToken(bad), bad).toBeNull();
       expect(await verifyToken(bad, k.pub), bad).toBeNull();
     }
     expect(await verifyToken(token, 'AAAA')).toBeNull();
@@ -104,9 +104,33 @@ describe('signed tokens', () => {
     for (const raw of ['[1]', 'null', '"x"', '{', '\xff']) {
       const json = raw === '\xff' ? new Uint8Array([0xff]) : new TextEncoder().encode(raw);
       const t = `DM1.${b64url(json)}.${b64url(await signAsync(json, k.secret))}`;
-      expect(peekToken(t), raw).toBeNull();
       expect(await verifyToken(t, k.pub), raw).toBeNull();
     }
+  });
+
+  // 0.12.1: `verifyWithKeys` checks time only when asked (`at`); licence tokens have no `exp` by
+  // design, so without `at` an `exp` in the past is still returned – the caller decides.
+  it('verifyWithKeys: optional time check on nbf/exp, caller owns the rest', async () => {
+    const { product, roots, cert } = await setup();
+    const keys = await certifiedKeys([{ kid: 'demo-2026', cert }], roots, AT);
+    const expect_ = { prefix: 'DM', product: 'demo', use: 'licence' };
+    const dev = (p: Payload) => sign('DM', { v: 1, typ: 'dev', kid: 'demo-2026', product: 'demo', ...p }, product.secret);
+    const inWindow = await dev({ nbf: AT - 5, exp: AT + 5 });
+    expect(await verifyWithKeys(inWindow, keys, expect_, AT)).not.toBeNull();
+    expect(await verifyWithKeys(inWindow, keys, expect_, AT - 5)).not.toBeNull();
+    expect(await verifyWithKeys(inWindow, keys, expect_, AT + 5)).not.toBeNull();
+    expect(await verifyWithKeys(inWindow, keys, expect_, AT - 6)).toBeNull(); // not yet valid
+    expect(await verifyWithKeys(inWindow, keys, expect_, AT + 6)).toBeNull(); // expired
+    expect(await verifyWithKeys(inWindow, keys, expect_)).not.toBeNull(); // no `at`: no time check
+    expect(await verifyWithKeys(await dev({ exp: AT - 1 }), keys, expect_)).not.toBeNull(); // caller's duty
+    // absent or null bounds impose nothing; malformed ones refuse the token
+    expect(await verifyWithKeys(await dev({}), keys, expect_, AT)).not.toBeNull();
+    expect(await verifyWithKeys(await dev({ nbf: null, exp: null }), keys, expect_, AT)).not.toBeNull();
+    expect(await verifyWithKeys(await dev({ exp: '9' }), keys, expect_, AT)).toBeNull();
+    expect(await verifyWithKeys(await dev({ exp: 1.5 }), keys, expect_, AT)).toBeNull();
+    expect(await verifyWithKeys(await dev({ nbf: 'x' }), keys, expect_, AT)).toBeNull();
+    // `typ` and `v` are the caller's: a token of any typ (other than cert) and any v comes back
+    expect((await verifyWithKeys(await dev({ v: 7, typ: 'other' }), keys, expect_, AT))?.v).toBe(7);
   });
 
   it('certificate chain: root → product key → token', async () => {
@@ -167,6 +191,10 @@ describe('signed tokens', () => {
     for (const bad of [
       await certWith({}, 'DM'),
       await certWith({ typ: 'lic' }),
+      // 0.12.1: only certificate format v: 1
+      await certWith({ v: 2 }),
+      await certWith({ v: '1' }),
+      await certWith({ v: undefined }),
       await certWith({ kid: 'root-2025' }),
       await certWith({ nbf: '1' }),
       await certWith({ nbf: undefined }),

@@ -63,6 +63,15 @@ describe("sync records", () => {
     await expect(
       openRecord(key, "g1|items|42", null as unknown as typeof sealed),
     ).rejects.toThrow("version");
+    // the nonce must have exactly 12 bytes (checked before WebCrypto is asked)
+    for (const n of [11, 13, 0, 16])
+      await expect(
+        openRecord(key, "g1|items|42", { ...sealed, n: toBase64(new Uint8Array(n)) }),
+        `${n} bytes`,
+      ).rejects.toThrow("cannot be opened");
+    // an empty context binds nothing and is refused on both sides
+    await expect(sealRecord(key, "", { a: 1 })).rejects.toThrow(/context/);
+    await expect(openRecord(key, "", sealed)).rejects.toThrow(/context/);
     // The same group key always gives the same record key.
     expect(
       await openRecord(await recordKey(group), "g1|items|42", sealed),
@@ -105,6 +114,14 @@ describe("device keys", () => {
     await expect(
       unwrapForDevice({ ...wrapped, v: 9 }, phone.privateKey, phonePublic, "x"),
     ).rejects.toThrow("version");
+    // the nonce must have exactly 12 bytes; an empty context is refused on both sides
+    for (const n of [11, 13])
+      await expect(
+        unwrapForDevice({ ...wrapped, n: toBase64(new Uint8Array(n)) }, phone.privateKey, phonePublic, "g1|device|d2"),
+        `${n} bytes`,
+      ).rejects.toThrow("cannot be unwrapped");
+    await expect(wrapForDevice(group, phonePublic, "")).rejects.toThrow(/context/);
+    await expect(unwrapForDevice(wrapped, phone.privateKey, phonePublic, "")).rejects.toThrow(/context/);
     await expect(
       unwrapForDevice(
         null as unknown as typeof wrapped,
