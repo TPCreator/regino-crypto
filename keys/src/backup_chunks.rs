@@ -9,7 +9,7 @@
 
 use crate::Error;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -53,7 +53,7 @@ impl BackupChunkKeys {
     }
 
     fn mac(&self, plain: &[u8]) -> [u8; 32] {
-        let mut m = <Hmac<Sha256> as Mac>::new_from_slice(self.name.as_ref()).expect("HMAC takes any key length");
+        let mut m = Hmac::<Sha256>::new_from_slice(self.name.as_ref()).expect("HMAC takes any key length");
         m.update(plain);
         m.finalize().into_bytes().into()
     }
@@ -72,8 +72,8 @@ impl BackupChunkKeys {
         let name = self.name(plain);
         let mut nonce = [0u8; 12];
         getrandom::fill(&mut nonce).map_err(|e| Error::Random(e.to_string()))?;
-        let ct = Aes256Gcm::new(self.enc.as_ref().into())
-            .encrypt(Nonce::from_slice(&nonce), Payload { msg: plain, aad: &self.aad(&name) })
+        let ct = Aes256Gcm::new((&*self.enc).into())
+            .encrypt(&nonce.into(), Payload { msg: plain, aad: &self.aad(&name) })
             .map_err(|_| Error::Decrypt)?;
         let mut out = Vec::with_capacity(OVERHEAD + plain.len());
         out.extend_from_slice(MAGIC);
@@ -87,8 +87,9 @@ impl BackupChunkKeys {
         if !valid_name(name) || blob.len() < OVERHEAD || &blob[..4] != MAGIC {
             return Err(Error::Format);
         }
-        let plain = Aes256Gcm::new(self.enc.as_ref().into())
-            .decrypt(Nonce::from_slice(&blob[4..16]), Payload { msg: &blob[16..], aad: &self.aad(name) })
+        let nonce: &[u8; 12] = blob[4..16].try_into().map_err(|_| Error::Format)?;
+        let plain = Aes256Gcm::new((&*self.enc).into())
+            .decrypt(nonce.into(), Payload { msg: &blob[16..], aad: &self.aad(name) })
             .map(Zeroizing::new)
             .map_err(|_| Error::Decrypt)?;
         let expected: Vec<u8> = (0..32).map(|i| u8::from_str_radix(&name[2 * i..2 * i + 2], 16).unwrap_or(0)).collect();
@@ -163,7 +164,7 @@ mod tests {
         let k = BackupChunkKeys::new(&[3u8; 32], "demo").unwrap();
         let fake = "0".repeat(64);
         let nonce = [0u8; 12];
-        let ct = Aes256Gcm::new(k.enc.as_ref().into()).encrypt(Nonce::from_slice(&nonce), Payload { msg: b"A", aad: &k.aad(&fake) }).unwrap();
+        let ct = Aes256Gcm::new((&*k.enc).into()).encrypt(&nonce.into(), Payload { msg: b"A", aad: &k.aad(&fake) }).unwrap();
         let blob = [MAGIC.as_slice(), &nonce, &ct].concat();
         assert_eq!(k.open(&fake, &blob).err(), Some(Error::Decrypt));
     }
