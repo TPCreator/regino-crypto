@@ -1,0 +1,26 @@
+name: tmp-lock
+on: push
+permissions:
+  contents: read
+jobs:
+  lock:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with: { toolchain: stable, components: clippy }
+      - name: Resolve the lockfile (minimal update for the changed requirements)
+        shell: bash
+        run: cargo fetch && git --no-pager diff --stat Cargo.lock
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.os == 'ubuntu-latest'
+        with: { name: lock, path: Cargo.lock, if-no-files-found: error }
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        continue-on-error: true
+      - run: cargo test --workspace --no-fail-fast
