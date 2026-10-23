@@ -1,11 +1,12 @@
 name: ci
-# One run per change (2026-10-19): push only to main + pull requests (before: every push and the PR = 2x), not for documentation.
+# One run per change (2026-10-19): push only to main + pull requests (before: every push and the PR = 2x).
+# Documentation-only pushes to main are skipped; pull requests always run, because the main ruleset requires
+# rust (ubuntu/windows), deny and ts – a skipped check would block a docs-only PR (2026-10-23).
 on:
   push:
     branches: [main]
     paths-ignore: ['docs/**', '**/*.md']
   pull_request:
-    paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
 
 # Minimal permissions; actions pinned to a commit (not a tag) so they cannot be silently swapped.
