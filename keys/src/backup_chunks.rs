@@ -11,7 +11,7 @@ use crate::Error;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
-use hmac::{Hmac, KeyInit as _, Mac};
+use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;

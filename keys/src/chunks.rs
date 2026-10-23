@@ -19,7 +19,7 @@ use crate::{Error, Key};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::XChaCha20Poly1305;
 use hkdf::Hkdf;
-use hmac::{Hmac, KeyInit as _, Mac};
+use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
