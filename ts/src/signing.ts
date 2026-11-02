@@ -1,0 +1,447 @@
+/**
+ * Signatures (Ed25519, `@noble/ed25519`, strict RFC 8032) – so a server that carries keys between
+ * people cannot pass off its own key as a colleague's, or its own group key as a new epoch. The same
+ * computation exists in Rust (`regino_keys::sign`, `ed25519-dalek`); the shared fixed vectors
+ * `testvectors/regino/signing-0.13.0.json` guard that both give the same bytes and accept the same
+ * signatures. Model, what it protects and what not: docs/SIGNING.md.
+ *
+ * - Signing key: a 32-byte seed – random (`newSigningKey`), kept only wrapped by the app's own keys
+ *   (like the inbox private key), or derived from a key the app keeps anyway (`deriveSigningKey`, HKDF-SHA256
+ *   `<app> signing-key v1 <label>`) – then it is the same on every device and after a restore.
+ * - `signingFingerprint`: "3f2a 9c01 …" (80 bits) – compared once by phone or in person, then pinned.
+ * - `signData` / `verifyData`: a signature over data bound to a context.
+ * - `signedWrapForDevice` / `openSignedWrap`: `wrapForDevice` plus the sender's signature over the context,
+ *   object id, version, recipient public key, the sender's public key and the wrapped key.
+ * - Manifests: a signed list of members (scope, version, key epoch, hash of the previous list, members
+ *   with their signing and sealing keys); `verifyManifest` / `verifyManifestChain` accept a list only if
+ *   it continues one already trusted and is signed by one of its admins (or by an anchor).
+ *
+ * Every signed message is `RGN-SIG1 || lp(kind) || lp(field) …` with `lp(x) = u32 BE length || x`.
+ */
+import { Point, getPublicKeyAsync, signAsync, verifyAsync } from "@noble/ed25519";
+import { equalBytes } from "./bytes";
+import { b64, checkContext, unb64 } from "./ecdh";
+import { unwrapForDevice, wrapForDevice, type WrappedGroupKey } from "./sync";
+
+export const SIGNATURE_LEN = 64;
+export const SIGNING_KEY_LEN = 32;
+export const MAX_CONTEXT = 1024;
+export const MAX_NAME = 256;
+export const MAX_KEY = 1024;
+export const MAX_MEMBERS = 1000;
+export const MAX_WRAPPED = 65536;
+/** Versions and epochs are whole numbers 0 … 2^53 − 1 (the same limit in Rust). */
+export const MAX_VERSION = Number.MAX_SAFE_INTEGER;
+/** Version of `SignedWrappedKey`. */
+export const SIGNED_WRAP_VERSION = 1;
+
+const enc = new TextEncoder();
+const MAGIC = enc.encode("RGN-SIG1");
+
+function seed(key: Uint8Array): Uint8Array {
+  if (!(key instanceof Uint8Array) || key.length !== SIGNING_KEY_LEN) throw new Error("The signing key must have 32 bytes.");
+  return key;
+}
+
+/** A new random signing key (32-byte seed). Keep it only wrapped by the app's own keys; wipe with `fill(0)`. */
+export function newSigningKey(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(SIGNING_KEY_LEN));
+}
+
+/**
+ * Signing key derived from a key the app keeps anyway (e.g. the master key, 32 bytes) with HKDF-SHA256,
+ * info `<app> signing-key v1 <label>` – identical to `regino_keys::sign::SigningKey::derive`.
+ */
+export async function deriveSigningKey(key: Uint8Array, app: string, label: string): Promise<Uint8Array> {
+  if (!(key instanceof Uint8Array) || key.length !== 32) throw new Error("The key must have 32 bytes.");
+  if (!/^[a-z][a-z0-9]{1,31}$/.test(app) || !/^[a-z][a-z0-9-]{2,31}$/.test(label)) throw new Error("Invalid app name or label.");
+  const base = await crypto.subtle.importKey("raw", key as BufferSource, "HKDF", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: enc.encode(`${app} signing-key v1 ${label}`) },
+    base,
+    256,
+  );
+  return new Uint8Array(bits);
+}
+
+/** The public key (32 bytes) of a signing key. */
+export function signingPublicKey(key: Uint8Array): Promise<Uint8Array> {
+  return getPublicKeyAsync(seed(key));
+}
+
+function point(bytes: Uint8Array): Point | null {
+  try {
+    return Point.fromBytes(bytes, false);
+  } catch {
+    return null;
+  }
+}
+
+/** A canonical point of prime order (not small order, no torsion component) – the same rule as in Rust. */
+export function isSigningPublicKey(key: Uint8Array): boolean {
+  const p = key instanceof Uint8Array && key.length === SIGNING_KEY_LEN ? point(key) : null;
+  return p !== null && !p.isSmallOrder() && p.isTorsionFree();
+}
+
+function checkPublic(key: Uint8Array, what = "signing"): void {
+  if (!isSigningPublicKey(key)) throw new Error(`Invalid ${what} public key.`);
+}
+
+/** Short code of a public key ("3f2a 9c01 …", 80 bits of SHA-256) for comparing by phone or in person. */
+export async function signingFingerprint(publicKey: Uint8Array): Promise<string> {
+  checkPublic(publicKey);
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", concat([enc.encode("regino signing fingerprint v1|"), publicKey]) as BufferSource));
+  const hex = Array.from(h.subarray(0, 10), (b) => b.toString(16).padStart(2, "0")).join("");
+  return hex.match(/.{4}/g)!.join(" ");
+}
+
+function concat(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let i = 0;
+  for (const p of parts) {
+    out.set(p, i);
+    i += p.length;
+  }
+  return out;
+}
+
+function u32(n: number): Uint8Array {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, n);
+  return b;
+}
+
+function u64(n: number): Uint8Array {
+  if (!Number.isSafeInteger(n) || n < 0) throw new Error("A version must be a whole number from 0 to 2^53 - 1.");
+  const b = new Uint8Array(8);
+  new DataView(b.buffer).setBigUint64(0, BigInt(n));
+  return b;
+}
+
+function message(kind: string, fields: Uint8Array[]): Uint8Array {
+  const parts: Uint8Array[] = [MAGIC];
+  for (const f of [enc.encode(kind), ...fields]) parts.push(u32(f.length), f);
+  return concat(parts);
+}
+
+/** UTF-8 of a non-empty, well-formed string of at most `max` bytes. */
+function text(s: string, max: number, what: string): Uint8Array {
+  checkContext(s, what);
+  const b = enc.encode(s);
+  if (b.length > max || new TextDecoder().decode(b) !== s) throw new Error(`The ${what} is too long or not valid text.`);
+  return b;
+}
+
+function bytes(b: Uint8Array, min: number, max: number, what: string): Uint8Array {
+  if (!(b instanceof Uint8Array) || b.length < min || b.length > max) throw new Error(`Invalid ${what}.`);
+  return b;
+}
+
+/**
+ * The strict Ed25519 check behind every function here (the same verdicts as Rust): the public key and R
+ * must be canonical points of prime order, S < L. Apps should sign through `signData` (context-bound)
+ * rather than over bare bytes.
+ */
+export async function verifyEd25519(publicKey: Uint8Array, msg: Uint8Array, signature: Uint8Array): Promise<boolean> {
+  if (!isSigningPublicKey(publicKey) || !(signature instanceof Uint8Array) || signature.length !== SIGNATURE_LEN) return false;
+  // R must be of prime order too: then the cofactored check of noble and the strict cofactorless check
+  // of ed25519-dalek accept exactly the same signatures (docs/SIGNING.md).
+  const r = point(signature.subarray(0, 32));
+  if (!r || r.isSmallOrder() || !r.isTorsionFree()) return false;
+  return verifyAsync(signature, msg, publicKey, { zip215: false });
+}
+
+const dataMessage = (context: string, data: Uint8Array) =>
+  message("data", [text(context, MAX_CONTEXT, "signing"), bytes(data, 0, Infinity, "data")]);
+
+/** Signs data bound to a context (e.g. `dovernik|center|12|share-key`). */
+export async function signData(key: Uint8Array, context: string, data: Uint8Array): Promise<Uint8Array> {
+  return signAsync(dataMessage(context, data), seed(key));
+}
+
+/** Checks a signature made by `signData`; false for anything else (wrong key, context, data, malformed). */
+export async function verifyData(publicKey: Uint8Array, context: string, data: Uint8Array, signature: Uint8Array): Promise<boolean> {
+  return verifyEd25519(publicKey, dataMessage(context, data), signature);
+}
+
+/** What the sender of a wrapped key vouches for (the same fields as `regino_keys::sign::WrapStatement`). */
+export interface WrapStatement {
+  /** the context the key was wrapped under */
+  context: string;
+  /** what the key opens, e.g. the id of a shared case */
+  objectId: string;
+  /** key version or epoch */
+  version: number;
+  /** the recipient's public key the key was wrapped for */
+  recipient: Uint8Array;
+  /** the wrapped key exactly as stored (`wrappedKeyBytes` for a `WrappedGroupKey`) */
+  wrapped: Uint8Array;
+}
+
+/** The bytes of a `WrappedGroupKey` that a signature covers: UTF-8 of `<v>.<e>.<n>.<c>`. */
+export function wrappedKeyBytes(w: WrappedGroupKey): Uint8Array {
+  if (!w || !Number.isInteger(w.v) || ![w.e, w.n, w.c].every((x) => typeof x === "string" && /^[A-Za-z0-9+/=]+$/.test(x)))
+    throw new Error("Invalid wrapped key.");
+  return enc.encode(`${w.v}.${w.e}.${w.n}.${w.c}`);
+}
+
+const wrapMessage = (st: WrapStatement, signer: Uint8Array) =>
+  message("wrap", [
+    text(st.context, MAX_CONTEXT, "signing"),
+    text(st.objectId, MAX_CONTEXT, "object id"),
+    u64(st.version),
+    bytes(st.recipient, 1, MAX_KEY, "recipient key"),
+    signer,
+    bytes(st.wrapped, 1, MAX_WRAPPED, "wrapped key"),
+  ]);
+
+/** The sender signs a key it wrapped for a recipient; its own public key is part of what is signed. */
+export async function signWrap(key: Uint8Array, st: WrapStatement): Promise<Uint8Array> {
+  return signAsync(wrapMessage(st, await signingPublicKey(key)), key);
+}
+
+/** Checks the sender's signature over a wrapped key; false for anything else. */
+export async function verifyWrap(signer: Uint8Array, st: WrapStatement, signature: Uint8Array): Promise<boolean> {
+  if (!isSigningPublicKey(signer)) return false;
+  return verifyEd25519(signer, wrapMessage(st, signer), signature);
+}
+
+/** A group key wrapped for a device and signed by the sender. */
+export interface SignedWrappedKey {
+  v: number;
+  /** object id */
+  id: string;
+  /** key version or epoch */
+  ver: number;
+  w: WrappedGroupKey;
+  /** base64 public key of the sender */
+  k: string;
+  /** base64 signature */
+  s: string;
+}
+
+/** `wrapForDevice` + the sender's signature (object id and version are signed with it). */
+export async function signedWrapForDevice(
+  groupKey: Uint8Array,
+  recipientPublic: Uint8Array,
+  context: string,
+  objectId: string,
+  version: number,
+  signingKey: Uint8Array,
+): Promise<SignedWrappedKey> {
+  const signer = await signingPublicKey(signingKey);
+  const w = await wrapForDevice(groupKey, recipientPublic, context);
+  const st = { context, objectId, version, recipient: recipientPublic, wrapped: wrappedKeyBytes(w) };
+  const s = await signAsync(wrapMessage(st, signer), signingKey);
+  return { v: SIGNED_WRAP_VERSION, id: objectId, ver: version, w, k: b64(signer), s: b64(s) };
+}
+
+/**
+ * Checks the signature, then unwraps. `expect` is what the app asked for (object id and version – e.g.
+ * the epoch from an accepted manifest); `signers` are the keys allowed to give this key (pinned keys,
+ * or members of an accepted manifest). Throws unless the sender is one of them and everything matches.
+ */
+export async function openSignedWrap(
+  signed: SignedWrappedKey,
+  devicePrivate: CryptoKey,
+  devicePublic: Uint8Array,
+  context: string,
+  expect: { objectId: string; version: number },
+  signers: readonly Uint8Array[],
+): Promise<{ groupKey: Uint8Array; signer: Uint8Array }> {
+  if (!signed || signed.v !== SIGNED_WRAP_VERSION) throw new Error("Unsupported signed wrapped key version.");
+  if (signed.id !== expect.objectId || signed.ver !== expect.version) throw new Error("The signed key is for another object or version.");
+  let signer: Uint8Array;
+  let sig: Uint8Array;
+  try {
+    signer = unb64(signed.k);
+    sig = unb64(signed.s);
+  } catch {
+    throw new Error("Invalid signed wrapped key.");
+  }
+  if (!signers.some((k) => equalBytes(k, signer))) throw new Error("The sender of the key is not trusted.");
+  const st = { context, objectId: signed.id, version: signed.ver, recipient: devicePublic, wrapped: wrappedKeyBytes(signed.w) };
+  if (!(await verifyWrap(signer, st, sig))) throw new Error("Invalid signature of the wrapped key.");
+  return { groupKey: await unwrapForDevice(signed.w, devicePrivate, devicePublic, context), signer };
+}
+
+/** A member of a signed list. */
+export interface Member {
+  /** the app's id (account id); unique in the list */
+  id: string;
+  /** the app's role name (e.g. `coordinator`, `member`, `external`); not interpreted here */
+  role: string;
+  /** may sign the next version of the list */
+  admin: boolean;
+  /** signing public key (32 bytes) */
+  sign: Uint8Array;
+  /** another public key the list vouches for, e.g. the P-256 key for `wrapForDevice`; may be empty */
+  seal: Uint8Array;
+}
+
+export interface Manifest {
+  /** what the list is for, e.g. `dovernik|center|12|case|<id>` */
+  scope: string;
+  /** 1 for the first list, then exactly +1 for every change */
+  version: number;
+  /** key epoch of the object (never goes down) */
+  epoch: number;
+  /** hash of the previous version (32 bytes); zeros for version 1 */
+  prev: Uint8Array;
+  members: Member[];
+}
+
+/** A list that passed `verifyManifest`; store `blob` to continue the chain later (`openManifest`). */
+export interface AcceptedManifest {
+  manifest: Manifest;
+  signer: Uint8Array;
+  /** SHA-256 of the blob – goes into `prev` of the next version */
+  hash: Uint8Array;
+  blob: Uint8Array;
+}
+
+/** The next version after `prev` with new members (scope, epoch and the chain link are taken over). */
+export function nextManifest(prev: AcceptedManifest, members: Member[]): Manifest {
+  const m = prev.manifest;
+  return { scope: m.scope, version: m.version + 1, epoch: m.epoch, prev: prev.hash, members };
+}
+
+/** The member with this signing key, if any. */
+export function memberByKey(manifest: Manifest, key: Uint8Array): Member | undefined {
+  return manifest.members.find((m) => equalBytes(m.sign, key));
+}
+
+function compareBytes(a: Uint8Array, b: Uint8Array): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return (a[i] as number) - (b[i] as number);
+  return a.length - b.length;
+}
+
+const ZERO32 = new Uint8Array(32);
+
+function manifestMessage(m: Manifest, signer: Uint8Array): Uint8Array {
+  if (!m || !Array.isArray(m.members) || m.members.length > MAX_MEMBERS) throw new Error("Invalid manifest.");
+  const prev = bytes(m.prev, 32, 32, "previous hash");
+  if (m.version === 0 || (m.version === 1) !== equalBytes(prev, ZERO32)) throw new Error("Invalid manifest version or previous hash.");
+  const members = m.members.map((x) => ({ x, id: text(x.id, MAX_NAME, "member id") }));
+  members.sort((a, b) => compareBytes(a.id, b.id));
+  if (members.some((e, i) => i > 0 && equalBytes(e.id, members[i - 1]!.id))) throw new Error("Duplicate member id.");
+  const fields = [text(m.scope, MAX_CONTEXT, "scope"), u64(m.version), u64(m.epoch), prev, signer, u32(members.length)];
+  for (const { x, id } of members) {
+    checkPublic(x.sign, "member signing");
+    fields.push(id, text(x.role, MAX_NAME, "role"), Uint8Array.of(x.admin ? 1 : 0), x.sign, bytes(x.seal, 0, MAX_KEY, "member key"));
+  }
+  return message("manifest", fields);
+}
+
+/** Signs a list; the blob is `message || signature` and is carried as is (the server stores it opaque). */
+export async function signManifest(key: Uint8Array, manifest: Manifest): Promise<Uint8Array> {
+  const msg = manifestMessage(manifest, await signingPublicKey(key));
+  return concat([msg, await signAsync(msg, key)]);
+}
+
+class Reader {
+  constructor(private b: Uint8Array) {}
+  field(): Uint8Array {
+    if (this.b.length < 4) throw new Error();
+    const n = new DataView(this.b.buffer, this.b.byteOffset, 4).getUint32(0);
+    if (this.b.length < 4 + n) throw new Error();
+    const f = this.b.subarray(4, 4 + n);
+    this.b = this.b.subarray(4 + n);
+    return f;
+  }
+  fixed(n: number): Uint8Array {
+    const f = this.field();
+    if (f.length !== n) throw new Error();
+    return f;
+  }
+  text(): string {
+    return new TextDecoder("utf-8", { fatal: true }).decode(this.field());
+  }
+  number(): number {
+    const v = new DataView(this.fixed(8).slice().buffer).getBigUint64(0);
+    if (v > BigInt(MAX_VERSION)) throw new Error();
+    return Number(v);
+  }
+  get done(): boolean {
+    return this.b.length === 0;
+  }
+}
+
+/**
+ * Reads a blob and checks its signature against the key named inside – **not** whether that key is
+ * trusted. Only for a blob the app accepted before with `verifyManifest` and stored itself.
+ */
+export async function openManifest(blob: Uint8Array): Promise<AcceptedManifest> {
+  let manifest: Manifest;
+  let signer: Uint8Array;
+  const msg = blob instanceof Uint8Array && blob.length >= MAGIC.length + SIGNATURE_LEN ? blob.subarray(0, blob.length - SIGNATURE_LEN) : null;
+  try {
+    if (!msg || !equalBytes(msg.subarray(0, MAGIC.length), MAGIC)) throw new Error();
+    const r = new Reader(msg.subarray(MAGIC.length));
+    if (r.text() !== "manifest") throw new Error();
+    const scope = r.text();
+    const version = r.number();
+    const epoch = r.number();
+    const prev = r.fixed(32).slice();
+    signer = r.fixed(32).slice();
+    const count = new DataView(r.fixed(4).slice().buffer).getUint32(0);
+    if (count > MAX_MEMBERS) throw new Error();
+    const members: Member[] = [];
+    for (let i = 0; i < count; i++) {
+      const id = r.text();
+      const role = r.text();
+      const a = r.fixed(1)[0];
+      if (a !== 0 && a !== 1) throw new Error();
+      members.push({ id, role, admin: a === 1, sign: r.fixed(32).slice(), seal: r.field().slice() });
+    }
+    if (!r.done) throw new Error();
+    manifest = { scope, version, epoch, prev, members };
+    checkPublic(signer);
+    // canonical: encoding the decoded list again must give the same bytes (sorted ids, limits)
+    if (!equalBytes(manifestMessage(manifest, signer), msg)) throw new Error();
+  } catch {
+    throw new Error("Not a valid member list.");
+  }
+  if (!(await verifyEd25519(signer, msg, blob.subarray(msg.length)))) throw new Error("Invalid signature of the member list.");
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", blob as BufferSource));
+  return { manifest, signer, hash, blob: blob.slice() };
+}
+
+/**
+ * Accepts a list only if it continues what the app already trusts:
+ * - no `prev` (the first list the app sees for this scope): version 1, signed by one of `anchors`;
+ * - `prev`: the same scope, version `prev + 1`, `prev` = hash of the previous list, epoch not lower,
+ *   signed by an admin of the previous list or by one of `anchors`.
+ * `anchors` are keys the app trusts for the scope by itself (pinned after comparing fingerprints).
+ */
+export async function verifyManifest(
+  blob: Uint8Array,
+  anchors: readonly Uint8Array[],
+  prev?: AcceptedManifest,
+): Promise<AcceptedManifest> {
+  const a = await openManifest(blob);
+  const m = a.manifest;
+  const anchor = anchors.some((k) => equalBytes(k, a.signer));
+  if (!prev) {
+    if (m.version !== 1) throw new Error("The member list does not continue the one already trusted.");
+    if (!anchor) throw new Error("The signer of the member list is not trusted.");
+  } else {
+    const p = prev.manifest;
+    if (m.scope !== p.scope || m.version !== p.version + 1 || !equalBytes(m.prev, prev.hash) || m.epoch < p.epoch)
+      throw new Error("The member list does not continue the one already trusted.");
+    if (!anchor && !memberByKey(p, a.signer)?.admin) throw new Error("The signer of the member list is not trusted.");
+  }
+  return a;
+}
+
+/** Follows `blobs` in order from `trusted` (or from version 1) and returns the last list. */
+export async function verifyManifestChain(
+  blobs: readonly Uint8Array[],
+  anchors: readonly Uint8Array[],
+  trusted?: AcceptedManifest,
+): Promise<AcceptedManifest> {
+  let cur = trusted;
+  for (const b of blobs) cur = await verifyManifest(b, anchors, cur);
+  if (!cur) throw new Error("The member list does not continue the one already trusted.");
+  return cur;
+}
