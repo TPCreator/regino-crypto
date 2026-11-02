@@ -53,6 +53,10 @@ pub fn combine(parts: &[Vec<u8>]) -> Result<Key, Error> {
         return Err(Error::Format);
     }
     let threshold = first[4];
+    // a threshold below 2 is never written by `split` (u8, so at most 255)
+    if threshold < 2 {
+        return Err(Error::Format);
+    }
     let fp: [u8; 8] = first[5..HEADER_LEN].try_into().map_err(|_| Error::Format)?;
     // x (the first share byte) -> share bytes; the same share twice counts once, but two different
     // shares with the same x cannot both be right – that is an error, not a silent choice.

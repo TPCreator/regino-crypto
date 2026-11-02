@@ -33,7 +33,9 @@ checked by the app automatically.
 | `fingerprint` / `signingFingerprint` | `3f2a 9c01 …` – the first 80 bits of SHA-256(`regino signing fingerprint v1\|` ‖ key), hex in groups of four. A server would need about 2^80 key generations to find another key with the same code. |
 | `sign_data` / `signData`, `verify_data` / `verifyData` | Signature over data bound to a non-empty context. |
 | `sign_wrap` / `signWrap`, `verify_wrap` / `verifyWrap` | The sender's signature over a wrapped key (`WrapStatement`: context, object id, version (epoch), **hash of the member list the sender accepted as the latest**, recipient public key, the sender's own public key, the wrapped bytes). `verify_wrap` checks the signature only. |
-| `verify_wrap_for` (Rust), `signedWrapForDevice` / `openSignedWrap` (TS) | What apps use: the key must name the list the **recipient** accepted itself as the latest (its hash) and that list's epoch, the sender must be an **admin** of that list (or a passed anchor), the signature must be valid – only then is the key unwrapped. A member who is not admin cannot give a key. |
+| `verify_wrap_for` (Rust), `signedWrapForDevice` / `openSignedWrap` (TS) | What apps use: the key must name the list the **recipient** accepted itself as the latest (its hash) and an epoch **not above** that list's epoch (earlier epochs are allowed, so a new member gets the older keys signed too – no separate key ring), the sender must be an **admin** of that list, the **signer of that list** (a coordinator who hands over in that version) or a passed anchor, the signature must be valid – only then is the key unwrapped. A member who is not admin cannot give a key. `openSignedWrap` returns the epoch. |
+| `sign_member_key` / `signMemberKey`, `verify_member_key` / `verifyMemberKey` | A member vouches for its own sealing key (`MemberKey`: scope, member id, version, seal key) with its signing key. Verification requires the expected scope and a version above the last one accepted for that member (replay refused). |
+| `Signer`, `seedSigner` (TS), `dataMessage` / `wrapMessage` / `manifestMessage` / `memberKeyMessage` (TS), `sign_prepared` (Rust) | Signing outside TypeScript: `signManifest`, `signedWrapForDevice` and `signMemberKey` take a `Signer` (`{ publicKey, sign(message) }`) or a seed. The message builders return the bytes to sign; `sign_prepared` in Rust signs only a well-formed, canonical message of a known kind that names its own key as the signer – not arbitrary bytes. |
 | `manifest_fingerprint` / `manifestFingerprint` | `3f2a 9c01 …` – code of an accepted list (80 bits of SHA-256(`regino manifest fingerprint v1\|` ‖ hash)), compared with the coordinator to detect a fork. |
 | `sign_manifest` / `signManifest` | A signed member list (below). |
 | `verify_manifest` / `verifyManifest`, `verify_manifest_chain` / `verifyManifestChain` | Accept a list only if it is for the **expected scope** and continues one already trusted. |
@@ -49,13 +51,14 @@ Every signed message is
 ```
 
 so no two different field lists give the same bytes, and a signature of one kind is never valid as
-another kind (`kind` is `data`, `wrap` or `manifest`). Numbers are u64 big-endian, at most 2^53 − 1
+another kind (`kind` is `data`, `wrap`, `manifest` or `member-key`). Numbers are u64 big-endian, at most 2^53 − 1
 (the largest whole number TypeScript holds exactly; refused above it on both sides).
 
 | Kind | Fields |
 |---|---|
 | `data` | context (UTF-8, 1–1024 B), data |
 | `wrap` | context, object id (1–1024 B), version (u64), list hash (32 B), recipient public key (1–1024 B), signer public key (32 B), wrapped (1–65 536 B) |
+| `member-key` | scope (1–1024 B), member id (1–256 B), version (u64), seal key (1–1024 B) |
 | `manifest` | scope (1–1024 B), version (u64, ≥ 1), epoch (u64), prev (32 B), signer public key (32 B), member count (u32, ≤ 1000), then per member sorted by the UTF-8 bytes of the id: id (1–256 B, unique), role (1–256 B), admin (1 B: 0 or 1), signing key (32 B, unique in the list), seal key (0–1024 B) |
 
 Texts are UTF-8 exactly as given – a leading U+FEFF is kept, not stripped, on both sides.
@@ -96,7 +99,8 @@ version and give keys). Roles are the app's own words; the core does not interpr
 - **no `prev`** (first list the app sees for this scope): version 1 (prev = 32 zero bytes), signed by
   one of `anchors`;
 - **with `prev`**: version = prev + 1, `prev` = hash of the trusted list, epoch not lower, signed by an
-  **admin of the trusted list** or by an **anchor**.
+  **admin of the trusted list** or by an **anchor**; and if a signing key of the trusted list is missing
+  (someone removed) or a member's `seal` changed, the epoch must be **higher** (`BadChain` otherwise).
 
 `anchors` are keys the app trusts for the scope on its own – pinned after a fingerprint comparison
 (e.g. the centre's management) – and are passed per call. An anchor may sign any next version, so a
@@ -104,9 +108,15 @@ list whose admins all left can still be continued (by management, recorded in th
 stores the last accepted blob (`AcceptedManifest.blob`) and continues from it with
 `verify_manifest_chain`.
 
-**Epoch:** the key epoch of the object. It never goes down (refused); the app **raises it whenever
-someone is removed** and seals new items only under the key of the new epoch – keeping it is allowed
-(adding a member needs no new key). Maximum 2^53 − 1.
+**Epoch:** the key epoch of the object. It never goes down (refused). The core **requires a higher
+epoch whenever someone is removed or a sealing key changes** (above); adding members or changing roles
+may keep it. The app seals new items only under the key of the latest epoch and wraps the new key for
+the remaining members. Maximum 2^53 − 1.
+
+**Handing over coordination** works in one version: the old coordinator signs version n + 1 in which
+the new coordinator is admin and it may be absent itself; because it signed n + 1, its wrapped keys
+for n + 1 are still accepted (`verify_wrap_for` allows the list's signer). The new coordinator signs
+everything after that.
 
 **Forks.** The chain rule cannot stop two lists with the same version: two admins may each sign their
 own version n + 1, or a removed admin X signs a version n + 1′ while the server withholds the real
@@ -159,16 +169,20 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
 
 ## How Dôverník is expected to use it (shared case, `docs/NAVRH-SPOLOCNY-SPIS.md` section 12)
 
-- **Personal signing key:** `deriveSigningKey(practiceMasterKey, 'dovernik', 'share')` – the same on
-  both computers of a therapist and after a restore, so colleagues do not have to compare again after a
-  restore. To replace it (a leaked master key is replaced anyway) derive with a new label.
+- **Personal signing key – derived and used only in Rust:** the master key never leaves Rust, so the
+  Tauri side derives `SigningKey::derive(&master, "dovernik", "share")` – the same on both computers of
+  a therapist and after a restore – and exposes one command that calls `sign::sign_prepared`. TypeScript
+  never sees a seed: it builds the message (`wrapMessage`, `manifestMessage`, `memberKeyMessage`) inside
+  `signManifest` / `signedWrapForDevice` / `signMemberKey` with a `Signer` whose `sign` calls that
+  command, and does all **verifying** itself. `sign_prepared` refuses anything that is not a canonical
+  message of a known kind naming this key as the signer. To replace the key, derive with a new label.
 - **The P-256 sharing key goes into the `seal` field of the member's entry** in the centre's (and the
-  case's) signed list – the list gives it an identity (member id) and a version, so a server cannot
-  bring back an older sharing key: a new sharing key (e.g. after a restore) means a new list version
-  signed by management or the coordinator. Do **not** rely on a bare `signData` over the key – it has
-  no version and could be replayed; if a member must vouch for its own key outside a list, sign
-  `<member id>|<version>|<key>` with context `dovernik|center|<centre>|share-key` and keep the highest
-  version seen.
+  case's) signed list. The member first vouches for it with `signMemberKey({ scope, memberId, version,
+  seal })`; an admin puts a `seal` into a list **only with a valid `verifyMemberKey` statement of a
+  higher version** than the one it accepted before for that member (it keeps the last version per
+  member). A new sharing key (e.g. after a restore) therefore needs a new statement and a new list
+  version with a new epoch; a server cannot bring back an older key. A bare `signData` over the key is
+  not used (no version, could be replayed).
 - **Centre key / management:** the centre's member list is a manifest (scope `dovernik|center|<centre>`,
   sealing keys of members in `seal`) signed by management (admins); the management keys are the anchors every member pins once when
   joining the centre (fingerprint comparison, like `center_key_pin` today). A new key of the centre
@@ -180,9 +194,11 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   pinned key), and every later version with `verifyManifest(blob, caseScope, management, prev)` –
   `caseScope` is the case the user opened, anchors are passed per call, so the creator is not an anchor
   for ever. Every new epoch of the case key is wrapped for each member by an **admin** (coordinator) with
-  `signedWrapForDevice(caseKey, member.seal, context, caseId, acceptedList, signerSeed)` and opened with
-  `openSignedWrap(…, caseId, acceptedList, management)` – only admins of the list the member itself
-  accepted, or management, can give it. Removing someone = new list version **and** new epoch. The
+  `signedWrapForDevice(caseKey, member.seal, context, caseId, acceptedList, rustSigner)` and opened with
+  `openSignedWrap(…, caseId, acceptedList, management)` – only admins (or the signer) of the list the
+  member itself accepted, or management, can give it. A new member also gets the keys of earlier
+  epochs, each signed: `signedWrapForDevice(oldKey, …, acceptedList, rustSigner, oldEpoch)`. Removing
+  someone = new list version **and** new epoch (enforced by the core). The
   `fwd` chain and the case code stay as an extra check; the app shows `manifestFingerprint` of the
   latest list in the case detail for comparing with the coordinator. Threats 2, 3 and 4 in the design
   are closed by the signatures. The residual risk "server together with a removed member forges the
@@ -198,8 +214,8 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
 - **Invitations:** an invitation is (1) the new manifest version that lists the invitee and (2) the case
   key wrapped for the invitee's sealing key with `signedWrapForDevice`. The invitee accepts the chain
   from version 1 with its anchors (management, or the pinned coordinator for an external) for the
-  scope of the case it was invited to, and opens the key only if it names that latest list and was
-  signed by an admin of it.
+  scope of the case it was invited to, and opens the keys (current and earlier epochs) only if they
+  name that latest list and were signed by an admin or the signer of it.
 
 ## For the auditor
 
@@ -211,3 +227,7 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   down; forks are not detected by the core – keys are bound to the list hash and apps compare the list
   code (is that sufficient, or should lists be countersigned by members?).
 - Deriving the signing key from the master key (HKDF with a separate label) vs. a random wrapped key.
+- `sign_prepared`: is parsing and rebuilding the message (known kind, field count, own key as signer,
+  canonical manifest) enough to keep a signing command exposed to the web view from being misused?
+- The epoch rule (removal or changed seal ⇒ higher epoch) and wraps of earlier epochs bound to the
+  latest list.

@@ -223,3 +223,17 @@ fn empty_context_is_refused() {
     let s = wrap::seal(&k, b"x", b"c").unwrap();
     assert_eq!(wrap::open(&k, &s, b"").unwrap_err(), Error::EmptyContext);
 }
+
+#[test]
+fn shamir_threshold_below_two_is_refused() {
+    let shares = shamir::split(&Key::generate().unwrap(), 2, 3).unwrap();
+    for t in [0u8, 1] {
+        let bad: Vec<Vec<u8>> = shares.iter().map(|s| {
+            let mut s = s.clone();
+            s[4] = t;
+            s
+        }).collect();
+        assert_eq!(shamir::combine(&bad).unwrap_err(), Error::Format, "threshold {t}");
+    }
+    assert!(shamir::combine(&shares[..2]).is_ok());
+}

@@ -18,6 +18,10 @@
 //!   members with their public keys); [`verify_manifest`] / [`verify_manifest_chain`] accept a list only if
 //!   it continues one already trusted and is signed by one of its admins (or by an anchor).
 //!
+//! - [`sign_member_key`] / [`verify_member_key`] – a member vouches for its own sealing key (versioned).
+//! - [`sign_prepared`] – signs a message built elsewhere (TypeScript `Signer`), only if it is canonical,
+//!   of a known kind and names this key as the signer – so the signing key can stay in Rust.
+//!
 //! Every signed message is `RGN-SIG1 || lp(kind) || lp(field) …` with `lp(x) = u32 BE length || x`:
 //! fields are never ambiguous, and a signature of one kind can never be taken for another.
 
@@ -222,9 +226,11 @@ pub fn verify_wrap(signer: &PublicKey, st: &WrapStatement, signature: &[u8]) -> 
 }
 
 /// The recipient checks a wrapped key against the member list it accepted itself as the latest:
-/// the statement must name that list (`manifest` = its hash) and its epoch (`version`), the signer must be
-/// an **admin** of that list or one of `anchors`, and the signature must be valid. `Error::BadChain` when
-/// the statement is for another list or epoch, `Error::UntrustedSigner` when the signer may not give it.
+/// the statement must name that list (`manifest` = its hash) and an epoch not above the list's (`version`
+/// ≤ epoch – a new member also gets the keys of earlier epochs, signed), the signer must be an **admin** of
+/// that list, the **signer of that list** (so a coordinator who hands over in that version can still give
+/// its keys) or one of `anchors`, and the signature must be valid. `Error::BadChain` when the statement is
+/// for another list or a later epoch, `Error::UntrustedSigner` when the signer may not give it.
 pub fn verify_wrap_for(
     list: &AcceptedManifest,
     anchors: &[PublicKey],
@@ -232,13 +238,102 @@ pub fn verify_wrap_for(
     st: &WrapStatement,
     signature: &[u8],
 ) -> Result<(), Error> {
-    if st.manifest != list.hash || st.version != list.manifest.epoch {
+    if st.manifest != list.hash || st.version > list.manifest.epoch {
         return Err(Error::BadChain);
     }
-    if !anchors.contains(signer) && !list.manifest.member_by_key(signer).is_some_and(|m| m.admin) {
+    if !anchors.contains(signer) && list.signer != *signer && !list.manifest.member_by_key(signer).is_some_and(|m| m.admin) {
         return Err(Error::UntrustedSigner);
     }
     verify_wrap(signer, st, signature)
+}
+
+/// A member vouches for its own sealing key: scope, its member id, a version that only goes up, the key.
+/// Signed with the member's signing key; an admin puts a `seal` into a list only with a valid statement of
+/// a higher version than the one it saw before (docs/SIGNING.md).
+#[derive(Clone, Copy, Debug)]
+pub struct MemberKey<'a> {
+    pub scope: &'a str,
+    pub member_id: &'a str,
+    pub version: u64,
+    pub seal: &'a [u8],
+}
+
+fn member_key_message(mk: &MemberKey) -> Result<Vec<u8>, Error> {
+    if mk.version > MAX_VERSION || mk.seal.is_empty() || mk.seal.len() > MAX_KEY {
+        return Err(Error::Format);
+    }
+    Ok(message("member-key", &[text(mk.scope, MAX_CONTEXT)?, text(mk.member_id, MAX_NAME)?, &mk.version.to_be_bytes(), mk.seal]))
+}
+
+/// The member signs its own sealing key.
+pub fn sign_member_key(key: &SigningKey, mk: &MemberKey) -> Result<[u8; SIGNATURE_LEN], Error> {
+    Ok(key.sign_message(&member_key_message(mk)?))
+}
+
+/// Checks a member's statement about its sealing key: for `scope`, with a version above `last_version`
+/// (the highest the checker accepted before for this member; `None` the first time) and a valid signature
+/// of `signer` (the member's signing key from the list). `Error::BadChain` for another scope or a version
+/// that is not higher (replay), `Error::BadSignature` for a bad signature.
+pub fn verify_member_key(signer: &PublicKey, mk: &MemberKey, signature: &[u8], scope: &str, last_version: Option<u64>) -> Result<(), Error> {
+    let msg = member_key_message(mk)?;
+    if mk.scope != scope || last_version.is_some_and(|v| mk.version <= v) {
+        return Err(Error::BadChain);
+    }
+    signer.verify_message(&msg, signature)
+}
+
+/// Signs a message prepared elsewhere (e.g. by the TypeScript side: `wrapMessage`, `manifestMessage`,
+/// `memberKeyMessage`, `dataMessage`) – for apps that keep the signing key in Rust. The message must be a
+/// well-formed `RGN-SIG1` message of a known kind with the right number of fields; a `wrap` or `manifest`
+/// must name this key as the signer, and a `manifest` must decode to a valid list. Anything else is refused
+/// (`Error::Format`), so this is not a signing oracle for arbitrary bytes.
+pub fn sign_prepared(key: &SigningKey, message: &[u8]) -> Result<[u8; SIGNATURE_LEN], Error> {
+    if message.get(..MAGIC.len()) != Some(&MAGIC[..]) {
+        return Err(Error::Format);
+    }
+    let mut r = Reader(&message[MAGIC.len()..]);
+    let kind = r.field()?;
+    let mut fields = Vec::new();
+    while !r.0.is_empty() {
+        fields.push(r.field()?);
+    }
+    let me = key.public_key();
+    let again = match (kind, fields.as_slice()) {
+        (b"data", [ctx, data]) => data_message(std::str::from_utf8(ctx).map_err(|_| Error::Format)?, data)?,
+        (b"wrap", [ctx, id, ver, list, recipient, signer, wrapped]) => {
+            if *signer != me.as_bytes() {
+                return Err(Error::Format);
+            }
+            let st = WrapStatement {
+                context: std::str::from_utf8(ctx).map_err(|_| Error::Format)?,
+                object_id: std::str::from_utf8(id).map_err(|_| Error::Format)?,
+                version: u64::from_be_bytes((*ver).try_into().map_err(|_| Error::Format)?),
+                manifest: (*list).try_into().map_err(|_| Error::Format)?,
+                recipient,
+                wrapped,
+            };
+            wrap_message(&st, &me)?
+        }
+        (b"member-key", [scope, id, ver, seal]) => member_key_message(&MemberKey {
+            scope: std::str::from_utf8(scope).map_err(|_| Error::Format)?,
+            member_id: std::str::from_utf8(id).map_err(|_| Error::Format)?,
+            version: u64::from_be_bytes((*ver).try_into().map_err(|_| Error::Format)?),
+            seal,
+        })?,
+        (b"manifest", _) => {
+            let (manifest, signer) = decode_manifest(message)?;
+            if signer != me {
+                return Err(Error::Format);
+            }
+            manifest.message(&me)?
+        }
+        _ => return Err(Error::Format),
+    };
+    // canonical: rebuilding the message from its fields must give the same bytes
+    if again != message {
+        return Err(Error::Format);
+    }
+    Ok(key.sign_message(message))
 }
 
 /// A member of a signed list.
@@ -359,10 +454,20 @@ impl<'a> Reader<'a> {
 /// Reads a blob and checks its signature against the key named inside – **not** whether that key is
 /// trusted. Only for a blob the app accepted before with [`verify_manifest`] and stored itself.
 pub fn open_manifest(blob: &[u8]) -> Result<AcceptedManifest, Error> {
-    if blob.len() < MAGIC.len() + SIGNATURE_LEN || &blob[..MAGIC.len()] != MAGIC {
+    if blob.len() < MAGIC.len() + SIGNATURE_LEN {
         return Err(Error::Format);
     }
     let (msg, sig) = blob.split_at(blob.len() - SIGNATURE_LEN);
+    let (manifest, signer) = decode_manifest(msg)?;
+    signer.verify_message(msg, sig)?;
+    Ok(AcceptedManifest { manifest, signer, hash: Sha256::digest(blob).into(), blob: blob.to_vec() })
+}
+
+/// The list and its signer from a `manifest` message (without the signature); canonical only.
+fn decode_manifest(msg: &[u8]) -> Result<(Manifest, PublicKey), Error> {
+    if msg.get(..MAGIC.len()) != Some(&MAGIC[..]) {
+        return Err(Error::Format);
+    }
     let mut r = Reader(&msg[MAGIC.len()..]);
     if r.field()? != b"manifest" {
         return Err(Error::Format);
@@ -396,10 +501,12 @@ pub fn open_manifest(blob: &[u8]) -> Result<AcceptedManifest, Error> {
     if manifest.message(&signer)? != msg {
         return Err(Error::Format);
     }
-    signer.verify_message(msg, sig)?;
-    Ok(AcceptedManifest { manifest, signer, hash: Sha256::digest(blob).into(), blob: blob.to_vec() })
+    Ok((manifest, signer))
 }
 
+/// A new list version must raise the epoch when a signing key of the previous version is missing or a
+/// member's `seal` changed (`Error::BadChain` otherwise); adding members may keep it.
+///
 /// Accepts a list only if it is for `scope` (the object the app asked for) and continues what the app
 /// already trusts:
 /// - `prev = None` (the first list the app sees for this scope): version 1, signed by one of `anchors`;
@@ -432,6 +539,11 @@ pub fn verify_manifest(blob: &[u8], scope: &str, anchors: &[PublicKey], prev: Op
         }
         Some(p) => {
             if m.version != p.manifest.version + 1 || m.prev != p.hash || m.epoch < p.manifest.epoch {
+                return Err(Error::BadChain);
+            }
+            // someone removed, or a sealing key changed: the old key must not be used any more – new epoch
+            let removed_or_changed = p.manifest.members.iter().any(|old| m.member_by_key(&old.sign).is_none_or(|new| new.seal != old.seal));
+            if removed_or_changed && m.epoch <= p.manifest.epoch {
                 return Err(Error::BadChain);
             }
             if !anchor && !p.manifest.member_by_key(&a.signer).is_some_and(|x| x.admin) {

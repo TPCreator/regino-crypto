@@ -161,10 +161,33 @@ export async function verifyEd25519(publicKey: Uint8Array, msg: Uint8Array, sign
   // of ed25519-dalek accept exactly the same signatures (docs/SIGNING.md).
   const r = point(signature.subarray(0, 32));
   if (!r || r.isSmallOrder() || !r.isTorsionFree()) return false;
-  return verifyAsync(signature, msg, publicKey, { zip215: false });
+  try {
+    return await verifyAsync(signature, msg, publicKey, { zip215: false });
+  } catch {
+    return false;
+  }
 }
 
-const dataMessage = (context: string, data: Uint8Array) =>
+/**
+ * Who signs: the public key and a function that signs prepared message bytes. In Dôverník the signing
+ * key never leaves Rust – `sign` calls `regino_keys::sign::sign_prepared`, which checks the message
+ * before it signs. `seedSigner` makes one from a seed (tests, apps without Rust).
+ */
+export interface Signer {
+  publicKey: Uint8Array;
+  sign(message: Uint8Array): Promise<Uint8Array>;
+}
+
+/** A `Signer` from a 32-byte seed. */
+export async function seedSigner(key: Uint8Array): Promise<Signer> {
+  const publicKey = await signingPublicKey(key);
+  return { publicKey, sign: (m) => signAsync(m, key) };
+}
+
+const asSigner = async (s: Signer | Uint8Array): Promise<Signer> => (s instanceof Uint8Array ? seedSigner(s) : s);
+
+/** The bytes `signData` signs (for a `Signer` outside TypeScript). */
+export const dataMessage = (context: string, data: Uint8Array) =>
   message("data", [text(context, MAX_CONTEXT, "signing"), bytes(data, 0, Infinity, "data")]);
 
 /** Signs data bound to a context (e.g. `dovernik|center|12|share-key`). */
@@ -200,7 +223,8 @@ export function wrappedKeyBytes(w: WrappedGroupKey): Uint8Array {
   return enc.encode(`${w.v}.${w.e}.${w.n}.${w.c}`);
 }
 
-const wrapMessage = (st: WrapStatement, signer: Uint8Array) =>
+/** The bytes a sender signs for a wrapped key (`signer` = its public key) – for a `Signer` outside TypeScript. */
+export const wrapMessage = (st: WrapStatement, signer: Uint8Array) =>
   message("wrap", [
     text(st.context, MAX_CONTEXT, "signing"),
     text(st.objectId, MAX_CONTEXT, "object id"),
@@ -244,6 +268,8 @@ export interface SignedWrappedKey {
 /**
  * `wrapForDevice` + the sender's signature over object id, the epoch and the hash of `list` – the member
  * list the sender accepted as the latest (for an invitation: the new version that lists the invitee).
+ * `epoch` defaults to the list's; an earlier one gives a new member the key of an earlier epoch.
+ * `signer` is a `Signer` (key kept in Rust) or a seed.
  */
 export async function signedWrapForDevice(
   groupKey: Uint8Array,
@@ -251,20 +277,23 @@ export async function signedWrapForDevice(
   context: string,
   objectId: string,
   list: AcceptedManifest,
-  signingKey: Uint8Array,
+  signer: Signer | Uint8Array,
+  epoch: number = list.manifest.epoch,
 ): Promise<SignedWrappedKey> {
-  const signer = await signingPublicKey(signingKey);
-  const version = list.manifest.epoch;
+  const who = await asSigner(signer);
+  if (epoch > list.manifest.epoch) throw new Error("The epoch is above the epoch of the member list.");
   const w = await wrapForDevice(groupKey, recipientPublic, context);
-  const st = { context, objectId, version, manifest: list.hash, recipient: recipientPublic, wrapped: wrappedKeyBytes(w) };
-  const s = await signAsync(wrapMessage(st, signer), signingKey);
-  return { v: SIGNED_WRAP_VERSION, id: objectId, ver: version, m: b64(list.hash), w, k: b64(signer), s: b64(s) };
+  const st = { context, objectId, version: epoch, manifest: list.hash, recipient: recipientPublic, wrapped: wrappedKeyBytes(w) };
+  const s = await who.sign(wrapMessage(st, who.publicKey));
+  return { v: SIGNED_WRAP_VERSION, id: objectId, ver: epoch, m: b64(list.hash), w, k: b64(who.publicKey), s: b64(s) };
 }
 
 /**
  * Checks, then unwraps: the key must be for `objectId`, for the list the recipient accepted itself as
- * the latest (`list` – its hash and epoch), signed by an **admin** of that list or one of `anchors`
- * (e.g. the centre's management), with a valid signature. Throws otherwise.
+ * the latest (`list` – its hash), for an epoch not above the list's (earlier epochs are allowed: a new
+ * member gets older keys too), signed by an **admin** of that list, by the **signer of that list** (a
+ * coordinator handing over in this version) or by one of `anchors` (e.g. the centre's management), with
+ * a valid signature. Returns the key, the signer and the epoch; throws otherwise.
  */
 export async function openSignedWrap(
   signed: SignedWrappedKey,
@@ -274,7 +303,7 @@ export async function openSignedWrap(
   objectId: string,
   list: AcceptedManifest,
   anchors: readonly Uint8Array[] = [],
-): Promise<{ groupKey: Uint8Array; signer: Uint8Array }> {
+): Promise<{ groupKey: Uint8Array; signer: Uint8Array; epoch: number }> {
   if (!signed || signed.v !== SIGNED_WRAP_VERSION) throw new Error("Unsupported signed wrapped key version.");
   let signer: Uint8Array;
   let sig: Uint8Array;
@@ -286,13 +315,13 @@ export async function openSignedWrap(
   } catch {
     throw new Error("Invalid signed wrapped key.");
   }
-  if (signed.id !== objectId || signed.ver !== list.manifest.epoch || !equalBytes(manifest, list.hash))
+  if (signed.id !== objectId || !(signed.ver <= list.manifest.epoch) || !equalBytes(manifest, list.hash))
     throw new Error("The signed key is for another object, epoch or member list.");
-  if (!anchors.some((k) => equalBytes(k, signer)) && !memberByKey(list.manifest, signer)?.admin)
+  if (!anchors.some((k) => equalBytes(k, signer)) && !equalBytes(signer, list.signer) && !memberByKey(list.manifest, signer)?.admin)
     throw new Error("The sender of the key is not trusted.");
   const st = { context, objectId, version: signed.ver, manifest, recipient: devicePublic, wrapped: wrappedKeyBytes(signed.w) };
   if (!(await verifyWrap(signer, st, sig))) throw new Error("Invalid signature of the wrapped key.");
-  return { groupKey: await unwrapForDevice(signed.w, devicePrivate, devicePublic, context), signer };
+  return { groupKey: await unwrapForDevice(signed.w, devicePrivate, devicePublic, context), signer, epoch: signed.ver };
 }
 
 /** A member of a signed list. */
@@ -348,7 +377,8 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
 
 const ZERO32 = new Uint8Array(32);
 
-function manifestMessage(m: Manifest, signer: Uint8Array): Uint8Array {
+/** The bytes that sign a list (`signer` = the signer's public key) – for a `Signer` outside TypeScript. */
+export function manifestMessage(m: Manifest, signer: Uint8Array): Uint8Array {
   if (!m || !Array.isArray(m.members) || m.members.length > MAX_MEMBERS) throw new Error("Invalid manifest.");
   const prev = bytes(m.prev, 32, 32, "previous hash");
   if (m.version === 0 || (m.version === 1) !== equalBytes(prev, ZERO32)) throw new Error("Invalid manifest version or previous hash.");
@@ -366,9 +396,45 @@ function manifestMessage(m: Manifest, signer: Uint8Array): Uint8Array {
 }
 
 /** Signs a list; the blob is `message || signature` and is carried as is (the server stores it opaque). */
-export async function signManifest(key: Uint8Array, manifest: Manifest): Promise<Uint8Array> {
-  const msg = manifestMessage(manifest, await signingPublicKey(key));
-  return concat([msg, await signAsync(msg, key)]);
+export async function signManifest(signer: Signer | Uint8Array, manifest: Manifest): Promise<Uint8Array> {
+  const who = await asSigner(signer);
+  const msg = manifestMessage(manifest, who.publicKey);
+  return concat([msg, await who.sign(msg)]);
+}
+
+/** A member vouches for its own sealing key (scope, its id, a version that only goes up, the key). */
+export interface MemberKey {
+  scope: string;
+  memberId: string;
+  version: number;
+  seal: Uint8Array;
+}
+
+/** The bytes a member signs for its sealing key – for a `Signer` outside TypeScript. */
+export const memberKeyMessage = (mk: MemberKey) =>
+  message("member-key", [text(mk.scope, MAX_CONTEXT, "scope"), text(mk.memberId, MAX_NAME, "member id"), u64(mk.version), bytes(mk.seal, 1, MAX_KEY, "member key")]);
+
+/** The member signs its own sealing key (with its signing key, a `Signer` or a seed). */
+export async function signMemberKey(signer: Signer | Uint8Array, mk: MemberKey): Promise<Uint8Array> {
+  return (await asSigner(signer)).sign(memberKeyMessage(mk));
+}
+
+/**
+ * Checks a member's statement about its sealing key: for `scope`, a version above `lastVersion` (the
+ * highest accepted before for this member; none the first time) and a valid signature of `signer` (the
+ * member's signing key from the list). An admin puts a `seal` into a list only after this. Throws.
+ */
+export async function verifyMemberKey(
+  signer: Uint8Array,
+  mk: MemberKey,
+  signature: Uint8Array,
+  scope: string,
+  lastVersion?: number,
+): Promise<void> {
+  const msg = memberKeyMessage(mk);
+  if (mk.scope !== scope) throw new Error("The member key is for another object.");
+  if (lastVersion !== undefined && !(mk.version > lastVersion)) throw new Error("The member key is not newer than the one accepted before.");
+  if (!(await verifyEd25519(signer, msg, signature))) throw new Error("Invalid signature of the member key.");
 }
 
 class Reader {
@@ -469,6 +535,12 @@ export async function verifyManifest(
     const p = prev.manifest;
     if (m.version !== p.version + 1 || !equalBytes(m.prev, prev.hash) || m.epoch < p.epoch)
       throw new Error("The member list does not continue the one already trusted.");
+    // someone removed, or a sealing key changed: the old key must not be used any more – new epoch
+    const changed = p.members.some((old) => {
+      const now = memberByKey(m, old.sign);
+      return !now || !equalBytes(now.seal, old.seal);
+    });
+    if (changed && m.epoch <= p.epoch) throw new Error("The member list does not continue the one already trusted (removal without a new epoch).");
     if (!anchor && !memberByKey(p, a.signer)?.admin) throw new Error("The signer of the member list is not trusted.");
   }
   return a;
