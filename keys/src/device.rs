@@ -20,7 +20,7 @@ use crate::{Error, Key, KEY_LEN};
 /// Shortest accepted device secret (bytes).
 pub const MIN_SECRET: usize = 32;
 
-fn ok_name(s: &str, min: usize) -> bool {
+pub(crate) fn ok_name(s: &str, min: usize) -> bool {
     (min..=32).contains(&s.len()) && s.as_bytes()[0].is_ascii_lowercase() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 

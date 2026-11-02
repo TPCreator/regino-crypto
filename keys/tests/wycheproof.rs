@@ -71,3 +71,24 @@ fn hkdf_sha256() {
     }
     assert_eq!(n, 86);
 }
+
+/// Ed25519 (`sign`): strict verification must give the Wycheproof verdict for every vector, and the
+/// public keys of all groups must pass `PublicKey::from_bytes` (they are torsion-free).
+#[test]
+fn ed25519() {
+    use ed25519_dalek::{Signature, VerifyingKey};
+    let doc = load("ed25519_test.json");
+    let mut n = 0;
+    for g in doc["testGroups"].as_array().unwrap() {
+        let pk: [u8; 32] = hex(&g["publicKey"]["pk"]).try_into().unwrap();
+        regino_keys::sign::PublicKey::from_bytes(&pk).expect("Wycheproof key is a valid signing key");
+        let key = VerifyingKey::from_bytes(&pk).unwrap();
+        for t in g["tests"].as_array().unwrap() {
+            let sig = hex(&t["sig"]);
+            let ok = <[u8; 64]>::try_from(sig.as_slice()).is_ok_and(|s| key.verify_strict(&hex(&t["msg"]), &Signature::from_bytes(&s)).is_ok());
+            assert_eq!(ok, t["result"] == "valid", "tcId {}", t["tcId"]);
+            n += 1;
+        }
+    }
+    assert!(n > 100);
+}

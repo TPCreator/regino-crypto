@@ -1,8 +1,8 @@
 [package]
 name = "regino-keys"
-version = "0.12.1"
+version = "0.13.0"
 edition = "2021"
-description = "Keys for Regino apps: Argon2id from a password, key wrapping (XChaCha20-Poly1305), 2-of-3 splitting (Shamir)"
+description = "Keys for Regino apps: Argon2id from a password, key wrapping (XChaCha20-Poly1305), 2-of-3 splitting (Shamir), Ed25519 signatures"
 authors = ["regino-crypto contributors"]
 license = "MIT OR Apache-2.0"
 publish = false
@@ -11,14 +11,15 @@ publish = false
 argon2 = "0.6"
 chacha20poly1305 = "0.11"
 blahaj = "0.7"
-sha2 = "0.11"
+sha2 = { version = "0.11", features = ["zeroize"] }
 hkdf = "0.13"
-hmac = "0.13"
+hmac = { version = "0.13", features = ["zeroize"] }
 aes-gcm = "0.11"
 zeroize = "1"
 subtle = "2"
 getrandom = "0.4"
 thiserror = "2"
+ed25519-dalek = "=3.0.0"
 
 [dev-dependencies]
 serde_json = "1"

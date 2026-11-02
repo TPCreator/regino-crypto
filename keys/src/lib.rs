@@ -6,6 +6,7 @@
 //! - [`wrap`] – wrapping a key with another key and sealing data (XChaCha20-Poly1305, version in the header).
 //! - [`recovery`] – key from a recovery phrase (12 or 24 words) via HKDF-SHA256.
 //! - [`device`] – key from a secret held by the device (Windows Hello signature, passkey PRF) via HKDF-SHA256 – quick unlock.
+//! - [`sign`] – Ed25519 signatures: personal signing key, fingerprint, signed wrapped keys, signed member lists.
 //! - [`shamir`] – splitting a key into N shares of which any K suffice (e.g. 2-of-3), with integrity check.
 //!
 //! Deleting data = discarding the wrapped key (crypto-shredding): without it, sealed data
@@ -21,6 +22,7 @@ pub mod device;
 pub mod kdf;
 pub mod recovery;
 pub mod shamir;
+pub mod sign;
 pub mod wrap;
 
 /// Core version – the app shows it in "About" (together with the commit from Cargo.lock).
@@ -76,4 +78,10 @@ pub enum Error {
     NotEnoughShares(u8),
     #[error("Shares do not belong together or one of them is corrupted.")]
     BadShares,
+    #[error("Invalid signature.")]
+    BadSignature,
+    #[error("The signature is valid, but the signer is not trusted for this.")]
+    UntrustedSigner,
+    #[error("The list does not continue the one already trusted.")]
+    BadChain,
 }
