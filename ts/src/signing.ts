@@ -11,7 +11,8 @@
  * - `signingFingerprint`: "3f2a 9c01 …" (80 bits) – compared once by phone or in person, then pinned.
  * - `signData` / `verifyData`: a signature over data bound to a context.
  * - `signedWrapForDevice` / `openSignedWrap`: `wrapForDevice` plus the sender's signature over the context,
- *   object id, version, recipient public key, the sender's public key and the wrapped key.
+ *   object id, epoch, hash of the accepted member list, recipient public key, the sender's public key and
+ *   the wrapped key; opened only from an admin of the list the recipient accepted itself.
  * - Manifests: a signed list of members (scope, version, key epoch, hash of the previous list, members
  *   with their signing and sealing keys); `verifyManifest` / `verifyManifestChain` accept a list only if
  *   it continues one already trusted and is signed by one of its admins (or by an anchor).
@@ -90,7 +91,19 @@ function checkPublic(key: Uint8Array, what = "signing"): void {
 /** Short code of a public key ("3f2a 9c01 …", 80 bits of SHA-256) for comparing by phone or in person. */
 export async function signingFingerprint(publicKey: Uint8Array): Promise<string> {
   checkPublic(publicKey);
-  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", concat([enc.encode("regino signing fingerprint v1|"), publicKey]) as BufferSource));
+  return code("regino signing fingerprint v1|", publicKey);
+}
+
+/**
+ * Short code of an accepted member list ("3f2a 9c01 …", 80 bits) – members compare it with the
+ * coordinator to be sure they all accepted the same list (a fork cannot be seen by the core alone).
+ */
+export async function manifestFingerprint(list: AcceptedManifest): Promise<string> {
+  return code("regino manifest fingerprint v1|", bytes(list.hash, 32, 32, "list hash"));
+}
+
+async function code(label: string, data: Uint8Array): Promise<string> {
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", concat([enc.encode(label), data]) as BufferSource));
   const hex = Array.from(h.subarray(0, 10), (b) => b.toString(16).padStart(2, "0")).join("");
   return hex.match(/.{4}/g)!.join(" ");
 }
@@ -128,7 +141,7 @@ function message(kind: string, fields: Uint8Array[]): Uint8Array {
 function text(s: string, max: number, what: string): Uint8Array {
   checkContext(s, what);
   const b = enc.encode(s);
-  if (b.length > max || new TextDecoder().decode(b) !== s) throw new Error(`The ${what} is too long or not valid text.`);
+  if (b.length > max || new TextDecoder("utf-8", { ignoreBOM: true }).decode(b) !== s) throw new Error(`The ${what} is too long or not valid text.`);
   return b;
 }
 
@@ -172,6 +185,8 @@ export interface WrapStatement {
   objectId: string;
   /** key version or epoch */
   version: number;
+  /** hash of the member list the sender accepted as the latest (`AcceptedManifest.hash`, 32 bytes) */
+  manifest: Uint8Array;
   /** the recipient's public key the key was wrapped for */
   recipient: Uint8Array;
   /** the wrapped key exactly as stored (`wrappedKeyBytes` for a `WrappedGroupKey`) */
@@ -190,6 +205,7 @@ const wrapMessage = (st: WrapStatement, signer: Uint8Array) =>
     text(st.context, MAX_CONTEXT, "signing"),
     text(st.objectId, MAX_CONTEXT, "object id"),
     u64(st.version),
+    bytes(st.manifest, 32, 32, "list hash"),
     bytes(st.recipient, 1, MAX_KEY, "recipient key"),
     signer,
     bytes(st.wrapped, 1, MAX_WRAPPED, "wrapped key"),
@@ -200,7 +216,10 @@ export async function signWrap(key: Uint8Array, st: WrapStatement): Promise<Uint
   return signAsync(wrapMessage(st, await signingPublicKey(key)), key);
 }
 
-/** Checks the sender's signature over a wrapped key; false for anything else. */
+/**
+ * Checks the sender's signature only – not whether the sender may give this key. Apps open keys with
+ * `openSignedWrap`, which also requires an admin of the accepted list.
+ */
 export async function verifyWrap(signer: Uint8Array, st: WrapStatement, signature: Uint8Array): Promise<boolean> {
   if (!isSigningPublicKey(signer)) return false;
   return verifyEd25519(signer, wrapMessage(st, signer), signature);
@@ -211,8 +230,10 @@ export interface SignedWrappedKey {
   v: number;
   /** object id */
   id: string;
-  /** key version or epoch */
+  /** key epoch (= `epoch` of the list in `m`) */
   ver: number;
+  /** base64 hash of the member list the sender accepted as the latest */
+  m: string;
   w: WrappedGroupKey;
   /** base64 public key of the sender */
   k: string;
@@ -220,47 +241,56 @@ export interface SignedWrappedKey {
   s: string;
 }
 
-/** `wrapForDevice` + the sender's signature (object id and version are signed with it). */
+/**
+ * `wrapForDevice` + the sender's signature over object id, the epoch and the hash of `list` – the member
+ * list the sender accepted as the latest (for an invitation: the new version that lists the invitee).
+ */
 export async function signedWrapForDevice(
   groupKey: Uint8Array,
   recipientPublic: Uint8Array,
   context: string,
   objectId: string,
-  version: number,
+  list: AcceptedManifest,
   signingKey: Uint8Array,
 ): Promise<SignedWrappedKey> {
   const signer = await signingPublicKey(signingKey);
+  const version = list.manifest.epoch;
   const w = await wrapForDevice(groupKey, recipientPublic, context);
-  const st = { context, objectId, version, recipient: recipientPublic, wrapped: wrappedKeyBytes(w) };
+  const st = { context, objectId, version, manifest: list.hash, recipient: recipientPublic, wrapped: wrappedKeyBytes(w) };
   const s = await signAsync(wrapMessage(st, signer), signingKey);
-  return { v: SIGNED_WRAP_VERSION, id: objectId, ver: version, w, k: b64(signer), s: b64(s) };
+  return { v: SIGNED_WRAP_VERSION, id: objectId, ver: version, m: b64(list.hash), w, k: b64(signer), s: b64(s) };
 }
 
 /**
- * Checks the signature, then unwraps. `expect` is what the app asked for (object id and version – e.g.
- * the epoch from an accepted manifest); `signers` are the keys allowed to give this key (pinned keys,
- * or members of an accepted manifest). Throws unless the sender is one of them and everything matches.
+ * Checks, then unwraps: the key must be for `objectId`, for the list the recipient accepted itself as
+ * the latest (`list` – its hash and epoch), signed by an **admin** of that list or one of `anchors`
+ * (e.g. the centre's management), with a valid signature. Throws otherwise.
  */
 export async function openSignedWrap(
   signed: SignedWrappedKey,
   devicePrivate: CryptoKey,
   devicePublic: Uint8Array,
   context: string,
-  expect: { objectId: string; version: number },
-  signers: readonly Uint8Array[],
+  objectId: string,
+  list: AcceptedManifest,
+  anchors: readonly Uint8Array[] = [],
 ): Promise<{ groupKey: Uint8Array; signer: Uint8Array }> {
   if (!signed || signed.v !== SIGNED_WRAP_VERSION) throw new Error("Unsupported signed wrapped key version.");
-  if (signed.id !== expect.objectId || signed.ver !== expect.version) throw new Error("The signed key is for another object or version.");
   let signer: Uint8Array;
   let sig: Uint8Array;
+  let manifest: Uint8Array;
   try {
     signer = unb64(signed.k);
     sig = unb64(signed.s);
+    manifest = unb64(signed.m);
   } catch {
     throw new Error("Invalid signed wrapped key.");
   }
-  if (!signers.some((k) => equalBytes(k, signer))) throw new Error("The sender of the key is not trusted.");
-  const st = { context, objectId: signed.id, version: signed.ver, recipient: devicePublic, wrapped: wrappedKeyBytes(signed.w) };
+  if (signed.id !== objectId || signed.ver !== list.manifest.epoch || !equalBytes(manifest, list.hash))
+    throw new Error("The signed key is for another object, epoch or member list.");
+  if (!anchors.some((k) => equalBytes(k, signer)) && !memberByKey(list.manifest, signer)?.admin)
+    throw new Error("The sender of the key is not trusted.");
+  const st = { context, objectId, version: signed.ver, manifest, recipient: devicePublic, wrapped: wrappedKeyBytes(signed.w) };
   if (!(await verifyWrap(signer, st, sig))) throw new Error("Invalid signature of the wrapped key.");
   return { groupKey: await unwrapForDevice(signed.w, devicePrivate, devicePublic, context), signer };
 }
@@ -284,7 +314,7 @@ export interface Manifest {
   scope: string;
   /** 1 for the first list, then exactly +1 for every change */
   version: number;
-  /** key epoch of the object (never goes down) */
+  /** key epoch: never goes down; raise it whenever someone is removed (new items only under the new key); ≤ 2^53 − 1 */
   epoch: number;
   /** hash of the previous version (32 bytes); zeros for version 1 */
   prev: Uint8Array;
@@ -325,9 +355,11 @@ function manifestMessage(m: Manifest, signer: Uint8Array): Uint8Array {
   const members = m.members.map((x) => ({ x, id: text(x.id, MAX_NAME, "member id") }));
   members.sort((a, b) => compareBytes(a.id, b.id));
   if (members.some((e, i) => i > 0 && equalBytes(e.id, members[i - 1]!.id))) throw new Error("Duplicate member id.");
+  members.forEach((e) => checkPublic(e.x.sign, "member signing"));
+  const keys = new Set(members.map((e) => b64(e.x.sign)));
+  if (keys.size !== members.length) throw new Error("Duplicate member signing key.");
   const fields = [text(m.scope, MAX_CONTEXT, "scope"), u64(m.version), u64(m.epoch), prev, signer, u32(members.length)];
   for (const { x, id } of members) {
-    checkPublic(x.sign, "member signing");
     fields.push(id, text(x.role, MAX_NAME, "role"), Uint8Array.of(x.admin ? 1 : 0), x.sign, bytes(x.seal, 0, MAX_KEY, "member key"));
   }
   return message("manifest", fields);
@@ -355,7 +387,7 @@ class Reader {
     return f;
   }
   text(): string {
-    return new TextDecoder("utf-8", { fatal: true }).decode(this.field());
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(this.field());
   }
   number(): number {
     const v = new DataView(this.fixed(8).slice().buffer).getBigUint64(0);
@@ -408,26 +440,34 @@ export async function openManifest(blob: Uint8Array): Promise<AcceptedManifest> 
 }
 
 /**
- * Accepts a list only if it continues what the app already trusts:
+ * Accepts a list only if it is for `scope` (the object the app asked for) and continues what the app
+ * already trusts:
  * - no `prev` (the first list the app sees for this scope): version 1, signed by one of `anchors`;
  * - `prev`: the same scope, version `prev + 1`, `prev` = hash of the previous list, epoch not lower,
  *   signed by an admin of the previous list or by one of `anchors`.
  * `anchors` are keys the app trusts for the scope by itself (pinned after comparing fingerprints).
+ *
+ * Two admins (or a removed admin together with a server that withholds the newer list) can sign two
+ * different lists with the same version; each member accepts the first it sees. The core cannot detect
+ * such a fork alone: signed wrapped keys name the list they belong to, and the app compares
+ * `manifestFingerprint` of the latest list with the coordinator (docs/SIGNING.md).
  */
 export async function verifyManifest(
   blob: Uint8Array,
+  scope: string,
   anchors: readonly Uint8Array[],
   prev?: AcceptedManifest,
 ): Promise<AcceptedManifest> {
   const a = await openManifest(blob);
   const m = a.manifest;
+  if (m.scope !== scope || (prev && prev.manifest.scope !== scope)) throw new Error("The member list is for another object.");
   const anchor = anchors.some((k) => equalBytes(k, a.signer));
   if (!prev) {
     if (m.version !== 1) throw new Error("The member list does not continue the one already trusted.");
     if (!anchor) throw new Error("The signer of the member list is not trusted.");
   } else {
     const p = prev.manifest;
-    if (m.scope !== p.scope || m.version !== p.version + 1 || !equalBytes(m.prev, prev.hash) || m.epoch < p.epoch)
+    if (m.version !== p.version + 1 || !equalBytes(m.prev, prev.hash) || m.epoch < p.epoch)
       throw new Error("The member list does not continue the one already trusted.");
     if (!anchor && !memberByKey(p, a.signer)?.admin) throw new Error("The signer of the member list is not trusted.");
   }
@@ -437,11 +477,13 @@ export async function verifyManifest(
 /** Follows `blobs` in order from `trusted` (or from version 1) and returns the last list. */
 export async function verifyManifestChain(
   blobs: readonly Uint8Array[],
+  scope: string,
   anchors: readonly Uint8Array[],
   trusted?: AcceptedManifest,
 ): Promise<AcceptedManifest> {
+  if (trusted && trusted.manifest.scope !== scope) throw new Error("The member list is for another object.");
   let cur = trusted;
-  for (const b of blobs) cur = await verifyManifest(b, anchors, cur);
+  for (const b of blobs) cur = await verifyManifest(b, scope, anchors, cur);
   if (!cur) throw new Error("The member list does not continue the one already trusted.");
   return cur;
 }

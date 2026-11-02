@@ -5,6 +5,7 @@ import { b64, unb64 } from './ecdh';
 import {
   deriveSigningKey,
   isSigningPublicKey,
+  manifestFingerprint,
   MAX_VERSION,
   memberByKey,
   newSigningKey,
@@ -126,25 +127,37 @@ describe('signed data', () => {
 });
 
 describe('signed wrapped keys', () => {
-  it('signatures match Rust and cover every field', async () => {
+  it('signatures match Rust, cover every field, and only an admin of the accepted list may give a key', async () => {
+    const list = (await accepted(3))!;
+    const anchor = hexd(v.manifest.anchor);
     for (const t of v.wrap) {
-      const st: WrapStatement = { context: t.context, objectId: t.object_id, version: t.version, recipient: hexd(t.recipient), wrapped: hexd(t.wrapped) };
-      if (t.wrapped_key) expect(hex(wrappedKeyBytes(t.wrapped_key))).toBe(t.wrapped);
+      const st: WrapStatement = { context: t.context, objectId: t.object_id, version: t.version, manifest: hexd(t.manifest), recipient: hexd(t.recipient), wrapped: hexd(t.wrapped) };
+      expect(hex(wrappedKeyBytes(t.wrapped_key))).toBe(t.wrapped);
       const sig = await signWrap(hexd(t.seed), st);
       expect(hex(sig)).toBe(t.signature);
       const signer = await signingPublicKey(hexd(t.seed));
       expect(await verifyWrap(signer, st, sig)).toBe(true);
-      for (const changed of [{ context: 'other' }, { objectId: 'other' }, { version: t.version - 1 }, { recipient: new Uint8Array(65).fill(1) }, { wrapped: te.encode('x') }])
+      for (const changed of [{ context: 'other' }, { objectId: 'other' }, { version: t.version - 1 }, { manifest: new Uint8Array(32).fill(7) }, { recipient: new Uint8Array(65).fill(1) }, { wrapped: te.encode('x') }])
         expect(await verifyWrap(signer, { ...st, ...changed }, sig)).toBe(false);
       expect(await verifyWrap(await pub(9), st, sig)).toBe(false);
       expect(await verifyWrap(new Uint8Array(32), st, sig)).toBe(false);
+      // the same verdict as Rust's verify_wrap_for, through openSignedWrap (checked before unwrapping)
+      const signed = { v: 1, id: t.object_id, ver: t.version, m: b64(hexd(t.manifest)), w: t.wrapped_key, k: b64(signer), s: b64(sig) };
+      const want = { ok: 'cannot be unwrapped', untrusted: 'not trusted', chain: 'another object' }[t.expect]!;
+      const dev = await newDeviceKeys(); // not the recipient – an accepted key then fails only at unwrapping
+      await expect(openSignedWrap(signed, dev.privateKey, hexd(t.recipient), t.context, t.object_id, list, [anchor]), t.expect).rejects.toThrow(want);
     }
+    const t = v.wrap_opaque;
+    const st = { context: t.context, objectId: t.object_id, version: t.version, manifest: hexd(t.manifest), recipient: hexd(t.recipient), wrapped: hexd(t.wrapped) };
+    expect(t.version).toBe(MAX_VERSION);
+    expect(hex(await signWrap(hexd(t.seed), st))).toBe(t.signature);
   });
 
   it('statement limits', async () => {
-    const st: WrapStatement = { context: 'c', objectId: 'o', version: 1, recipient: Uint8Array.of(1), wrapped: Uint8Array.of(2) };
+    const st: WrapStatement = { context: 'c', objectId: 'o', version: 1, manifest: new Uint8Array(32), recipient: Uint8Array.of(1), wrapped: Uint8Array.of(2) };
     await expect(signWrap(fill(1), { ...st, recipient: new Uint8Array(0) })).rejects.toThrow('recipient');
     await expect(signWrap(fill(1), { ...st, wrapped: new Uint8Array(65537) })).rejects.toThrow('wrapped');
+    await expect(signWrap(fill(1), { ...st, manifest: new Uint8Array(31) })).rejects.toThrow('list hash');
     await expect(signWrap(fill(1), { ...st, version: -1 })).rejects.toThrow('whole number');
     await expect(signWrap(fill(1), { ...st, version: 1.5 })).rejects.toThrow('whole number');
     await expect(signWrap(fill(1), { ...st, version: MAX_VERSION + 1 })).rejects.toThrow('whole number');
@@ -154,42 +167,64 @@ describe('signed wrapped keys', () => {
     expect(() => wrappedKeyBytes(null as unknown as WrappedGroupKey)).toThrow('Invalid wrapped key');
   });
 
-  it('opens only from a trusted sender, for the expected object and version, on the right device', async () => {
+  it('opens only from an admin of the accepted list (or an anchor), for that list and epoch, on the right device', async () => {
     const dev = await newDeviceKeys();
     const devPub = await publicKeyBytes(dev.publicKey);
     const groupKey = newGroupKey();
-    const sender = newSigningKey();
-    const senderPub = await signingPublicKey(sender);
-    const ctx = 'demo|case|1|key|2';
-    const signed = await signedWrapForDevice(groupKey, devPub, ctx, 'case-1', 2, sender);
+    const [admin, member, mgmt] = [newSigningKey(), newSigningKey(), newSigningKey()];
+    const m = async (id: string, isAdmin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin: isAdmin, sign: await signingPublicKey(k), seal: devPub });
+    const sc = 'demo|case|1';
+    const one = await verifyManifest(await signManifest(mgmt, { scope: sc, version: 1, epoch: 4, prev: new Uint8Array(32), members: [await m('a', true, admin), await m('b', false, member)] }), sc, [await signingPublicKey(mgmt)]);
+    const ctx = 'demo|case|1|key|4';
+    const signed = await signedWrapForDevice(groupKey, devPub, ctx, 'case-1', one, admin);
     expect(signed.v).toBe(1);
-    const expect1 = { objectId: 'case-1', version: 2 };
-    const got = await openSignedWrap(signed, dev.privateKey, devPub, ctx, expect1, [await pub(5), senderPub]);
+    expect(signed.ver).toBe(4);
+    const got = await openSignedWrap(signed, dev.privateKey, devPub, ctx, 'case-1', one);
     expect(got.groupKey).toEqual(groupKey);
-    expect(got.signer).toEqual(senderPub);
-
-    await expect(openSignedWrap(signed, dev.privateKey, devPub, ctx, expect1, [await pub(5)])).rejects.toThrow('not trusted');
-    await expect(openSignedWrap(signed, dev.privateKey, devPub, ctx, { objectId: 'case-2', version: 2 }, [senderPub])).rejects.toThrow('another object');
-    await expect(openSignedWrap(signed, dev.privateKey, devPub, ctx, { objectId: 'case-1', version: 3 }, [senderPub])).rejects.toThrow('another object');
-    // the server swaps the version in the envelope: the signature no longer matches
-    await expect(openSignedWrap({ ...signed, ver: 3 }, dev.privateKey, devPub, ctx, { objectId: 'case-1', version: 3 }, [senderPub])).rejects.toThrow('Invalid signature');
-    // the server wraps its own key and signs with its own key: not a trusted sender
-    const evil = newSigningKey();
-    const forged = await signedWrapForDevice(newGroupKey(), devPub, ctx, 'case-1', 2, evil);
-    await expect(openSignedWrap(forged, dev.privateKey, devPub, ctx, expect1, [senderPub])).rejects.toThrow('not trusted');
-    // the server wraps its own key but keeps the sender's name and signature
+    expect(got.signer).toEqual(await signingPublicKey(admin));
+    // a member who is not admin cannot give the key; management only when passed as anchor
+    const byMember = await signedWrapForDevice(groupKey, devPub, ctx, 'case-1', one, member);
+    await expect(openSignedWrap(byMember, dev.privateKey, devPub, ctx, 'case-1', one)).rejects.toThrow('not trusted');
+    const byMgmt = await signedWrapForDevice(groupKey, devPub, ctx, 'case-1', one, mgmt);
+    await expect(openSignedWrap(byMgmt, dev.privateKey, devPub, ctx, 'case-1', one)).rejects.toThrow('not trusted');
+    expect((await openSignedWrap(byMgmt, dev.privateKey, devPub, ctx, 'case-1', one, [await signingPublicKey(mgmt)])).groupKey).toEqual(groupKey);
+    // another object, epoch or list
+    await expect(openSignedWrap(signed, dev.privateKey, devPub, ctx, 'case-2', one)).rejects.toThrow('another object');
+    const two = await verifyManifest(await signManifest(admin, { ...nextManifest(one, [await m('a', true, admin)]), epoch: 5 }), sc, [], one);
+    await expect(openSignedWrap(signed, dev.privateKey, devPub, ctx, 'case-1', two)).rejects.toThrow('another object');
+    // the server swaps epoch and list hash in the envelope: the signature no longer matches
+    await expect(openSignedWrap({ ...signed, ver: 5, m: b64(two.hash) }, dev.privateKey, devPub, ctx, 'case-1', two)).rejects.toThrow('Invalid signature');
+    // the server wraps its own key and signs with its own key: not trusted
+    const forged = await signedWrapForDevice(newGroupKey(), devPub, ctx, 'case-1', one, newSigningKey());
+    await expect(openSignedWrap(forged, dev.privateKey, devPub, ctx, 'case-1', one)).rejects.toThrow('not trusted');
+    // the server wraps its own key but keeps the admin's name and signature
     const own = await wrapForDevice(newGroupKey(), devPub, ctx);
-    await expect(openSignedWrap({ ...signed, w: own }, dev.privateKey, devPub, ctx, expect1, [senderPub])).rejects.toThrow('Invalid signature');
-    await expect(openSignedWrap({ ...signed, s: '***' }, dev.privateKey, devPub, ctx, expect1, [senderPub])).rejects.toThrow('Invalid signed');
-    await expect(openSignedWrap({ ...signed, v: 2 }, dev.privateKey, devPub, ctx, expect1, [senderPub])).rejects.toThrow('version');
-    await expect(openSignedWrap(null as unknown as typeof signed, dev.privateKey, devPub, ctx, expect1, [senderPub])).rejects.toThrow('version');
+    await expect(openSignedWrap({ ...signed, w: own }, dev.privateKey, devPub, ctx, 'case-1', one)).rejects.toThrow('Invalid signature');
+    await expect(openSignedWrap({ ...signed, s: '***' }, dev.privateKey, devPub, ctx, 'case-1', one)).rejects.toThrow('Invalid signed');
+    await expect(openSignedWrap({ ...signed, v: 2 }, dev.privateKey, devPub, ctx, 'case-1', one)).rejects.toThrow('version');
+    await expect(openSignedWrap(null as unknown as typeof signed, dev.privateKey, devPub, ctx, 'case-1', one)).rejects.toThrow('version');
     // another device cannot unwrap even with a valid signature
     const other = await newDeviceKeys();
-    await expect(openSignedWrap(signed, other.privateKey, await publicKeyBytes(other.publicKey), ctx, expect1, [senderPub])).rejects.toThrow('Invalid signature');
-    const forOther = await signedWrapForDevice(groupKey, await publicKeyBytes(other.publicKey), ctx, 'case-1', 2, sender);
-    await expect(openSignedWrap({ ...forOther, w: signed.w }, other.privateKey, await publicKeyBytes(other.publicKey), ctx, expect1, [senderPub])).rejects.toThrow('Invalid signature');
-    expect(unb64(signed.k)).toEqual(senderPub);
-    expect(b64(senderPub)).toBe(signed.k);
+    await expect(openSignedWrap(signed, other.privateKey, await publicKeyBytes(other.publicKey), ctx, 'case-1', one)).rejects.toThrow('Invalid signature');
+    expect(unb64(signed.k)).toEqual(await signingPublicKey(admin));
+  });
+
+  it('a fork: two lists with the same version – keys of one branch do not open on the other, codes differ', async () => {
+    const [x, y, mgmt] = [newSigningKey(), newSigningKey(), newSigningKey()];
+    const m = async (id: string, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin: true, sign: await signingPublicKey(k), seal: new Uint8Array(0) });
+    const sc = 'demo|case|9';
+    const one = await verifyManifest(await signManifest(mgmt, { scope: sc, version: 1, epoch: 1, prev: new Uint8Array(32), members: [await m('x', x), await m('y', y)] }), sc, [await signingPublicKey(mgmt)]);
+    const a = await verifyManifest(await signManifest(x, { ...nextManifest(one, [await m('x', x)]), epoch: 2 }), sc, [], one);
+    const b = await verifyManifest(await signManifest(y, { ...nextManifest(one, [await m('y', y)]), epoch: 2 }), sc, [], one);
+    expect(a.manifest.version).toBe(b.manifest.version);
+    expect(await manifestFingerprint(a)).not.toBe(await manifestFingerprint(b));
+    expect(await manifestFingerprint(a)).toMatch(/^[0-9a-f]{4}( [0-9a-f]{4}){4}$/);
+    const dev = await newDeviceKeys();
+    const devPub = await publicKeyBytes(dev.publicKey);
+    const k = await signedWrapForDevice(newGroupKey(), devPub, 'c', 'case-9', a, x);
+    await expect(openSignedWrap(k, dev.privateKey, devPub, 'c', 'case-9', b)).rejects.toThrow('another object');
+    expect((await openSignedWrap(k, dev.privateKey, devPub, 'c', 'case-9', a)).groupKey.length).toBe(32);
+    await expect(manifestFingerprint({ ...a, hash: new Uint8Array(31) })).rejects.toThrow('list hash');
   });
 });
 
@@ -198,7 +233,7 @@ const members = (c: { members: { id: string; role: string; admin: boolean; sign:
 
 async function accepted(upto: number): Promise<AcceptedManifest | undefined> {
   if (upto === 0) return undefined;
-  return verifyManifestChain(v.manifest.chain.slice(0, upto).map((c) => hexd(c.blob)), [hexd(v.manifest.anchor)]);
+  return verifyManifestChain(v.manifest.chain.slice(0, upto).map((c) => hexd(c.blob)), v.manifest.scope, [hexd(v.manifest.anchor)]);
 }
 
 describe('signed member lists (shared vectors with Rust)', () => {
@@ -206,8 +241,9 @@ describe('signed member lists (shared vectors with Rust)', () => {
     const anchor = hexd(v.manifest.anchor);
     let prev: AcceptedManifest | undefined;
     for (const c of v.manifest.chain) {
-      const a = await verifyManifest(hexd(c.blob), [anchor], prev);
+      const a = await verifyManifest(hexd(c.blob), v.manifest.scope, [anchor], prev);
       expect(hex(a.hash)).toBe(c.hash);
+      expect(await manifestFingerprint(a)).toBe(c.fingerprint);
       expect(hex(a.signer)).toBe(c.signer);
       expect(a.manifest.version).toBe(c.version);
       expect(a.manifest.epoch).toBe(c.epoch);
@@ -220,22 +256,25 @@ describe('signed member lists (shared vectors with Rust)', () => {
       prev = a;
     }
     const all = v.manifest.chain.map((c) => hexd(c.blob));
-    expect(await verifyManifestChain(all, [anchor])).toEqual(prev);
-    expect(await verifyManifestChain([], [], prev)).toEqual(prev);
-    expect(await verifyManifestChain(all.slice(1), [], await accepted(1))).toEqual(prev);
-    await expect(verifyManifestChain([], [])).rejects.toThrow('does not continue');
+    const sc = v.manifest.scope;
+    expect(await verifyManifestChain(all, sc, [anchor])).toEqual(prev);
+    expect(await verifyManifestChain([], sc, [], prev)).toEqual(prev);
+    await expect(verifyManifestChain([], 'other', [], prev)).rejects.toThrow('another object');
+    expect(await verifyManifestChain(all.slice(1), sc, [], await accepted(1))).toEqual(prev);
+    await expect(verifyManifestChain([], sc, [])).rejects.toThrow('does not continue');
+    await expect(verifyManifestChain(all, 'dovernik|center|12|case|01JOTHER', [anchor])).rejects.toThrow('another object');
   });
 
   it('refused lists are refused for the same reason as in Rust', async () => {
     const anchor = hexd(v.manifest.anchor);
     for (const r of v.manifest.refused) {
-      const want = r.error === 'untrusted' ? 'not trusted' : 'does not continue';
-      await expect(verifyManifest(hexd(r.blob), [anchor], await accepted(r.after))).rejects.toThrow(want);
+      const want = { untrusted: 'not trusted', chain: 'does not continue', scope: 'another object' }[r.error]!;
+      await expect(verifyManifest(hexd(r.blob), v.manifest.scope, [anchor], await accepted(r.after)), r.case).rejects.toThrow(want);
     }
     const prev = await accepted(v.manifest.rescue.after);
-    const rescue = await verifyManifest(hexd(v.manifest.rescue.blob), [anchor], prev);
+    const rescue = await verifyManifest(hexd(v.manifest.rescue.blob), v.manifest.scope, [anchor], prev);
     expect(rescue.signer).toEqual(anchor);
-    await expect(verifyManifest(hexd(v.manifest.rescue.blob), [], prev)).rejects.toThrow('not trusted');
+    await expect(verifyManifest(hexd(v.manifest.rescue.blob), v.manifest.scope, [], prev)).rejects.toThrow('not trusted');
   });
 
   it('damaged or non-canonical blobs are refused', async () => {
@@ -265,7 +304,8 @@ describe('signed member lists (shared vectors with Rust)', () => {
     const [a, b, c] = [fill(1), fill(2), fill(3)];
     const m = async (id: string, admin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'member', admin, sign: await signingPublicKey(k), seal: new Uint8Array(0) });
     const first: Manifest = { scope: 'demo|case|1', version: 1, epoch: 0, prev: new Uint8Array(32), members: [await m('b', true, b)] };
-    const one = await verifyManifest(await signManifest(a, first), [await signingPublicKey(a)]);
+    const sc = 'demo|case|1';
+    const one = await verifyManifest(await signManifest(a, first), sc, [await signingPublicKey(a)]);
     expect(memberByKey(one.manifest, await signingPublicKey(b))?.id).toBe('b');
     expect(memberByKey(one.manifest, await signingPublicKey(a))).toBeUndefined();
     const bad = (x: Partial<Manifest>) => signManifest(a, { ...first, ...x });
@@ -275,28 +315,32 @@ describe('signed member lists (shared vectors with Rust)', () => {
     await expect(bad({ prev: new Uint8Array(31) })).rejects.toThrow('previous hash');
     await expect(bad({ epoch: MAX_VERSION + 1 })).rejects.toThrow('whole number');
     await expect(bad({ scope: '' })).rejects.toThrow('must not be empty');
-    await expect(bad({ members: [await m('b', true, b), await m('b', false, a)] })).rejects.toThrow('Duplicate');
+    await expect(bad({ members: [await m('b', true, b), await m('b', false, a)] })).rejects.toThrow('Duplicate member id');
+    await expect(bad({ members: [await m('b', true, b), await m('c', false, b)] })).rejects.toThrow('Duplicate member signing key');
     await expect(bad({ members: [await m('', true, b)] })).rejects.toThrow('must not be empty');
     await expect(bad({ members: [{ ...(await m('b', true, b)), seal: new Uint8Array(1025) }] })).rejects.toThrow('member key');
     await expect(bad({ members: [{ ...(await m('b', true, b)), sign: new Uint8Array(32) }] })).rejects.toThrow('member signing');
-    const many = await Promise.all(Array.from({ length: 1001 }, (_, i) => m(String(i), false, b)));
+    const many = await Promise.all(Array.from({ length: 1001 }, (_, i) => m(String(i), false, fill(i % 250))));
     await expect(bad({ members: many })).rejects.toThrow('Invalid manifest');
     await expect(signManifest(a, null as unknown as Manifest)).rejects.toThrow('Invalid manifest');
     // ids are sorted by their UTF-8 bytes (as in Rust), also with a common prefix
-    const sorted = await verifyManifest(await signManifest(a, { ...first, members: [await m('bb', false, c), await m('b', true, b), await m('ä', false, c)] }), [await signingPublicKey(a)]);
-    expect(sorted.manifest.members.map((x) => x.id)).toEqual(['b', 'bb', 'ä']);
+    const sorted = await verifyManifest(await signManifest(a, { ...first, members: [await m('bb', false, c), await m('b', true, b), await m('ä', false, fill(4)), await m('\ufeffz', false, fill(5))] }), sc, [await signingPublicKey(a)]);
+    expect(sorted.manifest.members.map((x) => x.id)).toEqual(['b', 'bb', 'ä', '\ufeffz']);
 
     const next = nextManifest(one, [await m('b', true, b), await m('c', false, c)]);
     expect(next.version).toBe(2);
-    await expect(verifyManifest(await signManifest(c, next), [await signingPublicKey(a)], one)).rejects.toThrow('not trusted');
-    const two = await verifyManifest(await signManifest(b, next), [], one);
-    await expect(verifyManifest(await signManifest(b, { ...nextManifest(two, []), scope: 'demo|case|2' }), [], two)).rejects.toThrow('does not continue');
-    await expect(verifyManifest(two.blob, [], two)).rejects.toThrow('does not continue');
+    await expect(verifyManifest(await signManifest(c, next), sc, [await signingPublicKey(a)], one)).rejects.toThrow('not trusted');
+    const two = await verifyManifest(await signManifest(b, next), sc, [], one);
+    const other = await signManifest(b, { ...nextManifest(two, []), scope: 'demo|case|2' });
+    await expect(verifyManifest(other, sc, [], two)).rejects.toThrow('another object');
+    await expect(verifyManifest(other, 'demo|case|2', [], two)).rejects.toThrow('another object');
+    await expect(verifyManifest(two.blob, sc, [], two)).rejects.toThrow('does not continue');
   });
 
   it('malformed blobs give the same verdict as in Rust', async () => {
     for (const t of v.manifest.malformed) {
       if (t.valid) expect((await openManifest(hexd(t.blob))).manifest.members.length, t.case).toBe(2);
+      else if (t.case === 'duplicate signing key') await expect(openManifest(hexd(t.blob)), t.case).rejects.toThrow('Not a valid member list');
       else await expect(openManifest(hexd(t.blob)), t.case).rejects.toThrow('Not a valid member list');
     }
   });

@@ -79,31 +79,65 @@ fn data_signatures_match_typescript() {
 #[test]
 fn wrap_signatures_match_typescript() {
     let doc = vectors();
+    let list = accepted(&doc, 3).unwrap();
     for t in doc["wrap"].as_array().unwrap() {
+        assert_eq!(text(&t["list"]), "v3");
         let k = seed(&t["seed"]);
         let (recipient, wrapped, sig) = (hex(&t["recipient"]), hex(&t["wrapped"]), hex(&t["signature"]));
         let st = WrapStatement {
             context: text(&t["context"]),
             object_id: text(&t["object_id"]),
             version: t["version"].as_u64().unwrap(),
+            manifest: hex(&t["manifest"]).try_into().unwrap(),
             recipient: &recipient,
             wrapped: &wrapped,
         };
         assert_eq!(sign::sign_wrap(&k, &st).unwrap().to_vec(), sig);
         sign::verify_wrap(&k.public_key(), &st, &sig).unwrap();
+        let got = sign::verify_wrap_for(&list, &[anchor(&doc)], &k.public_key(), &st, &sig);
+        let want = match text(&t["expect"]) {
+            "ok" => Ok(()),
+            "untrusted" => Err(Error::UntrustedSigner),
+            "chain" => Err(Error::BadChain),
+            e => panic!("{e}"),
+        };
+        assert_eq!(got, want, "{t}");
+        if want.is_err() {
+            continue;
+        }
         // every field is covered
         let other = [1u8; 65];
         for changed in [
             WrapStatement { context: "other", ..st },
             WrapStatement { object_id: "other", ..st },
             WrapStatement { version: st.version - 1, ..st },
+            WrapStatement { manifest: [7; 32], ..st },
             WrapStatement { recipient: &other, ..st },
             WrapStatement { wrapped: b"other", ..st },
         ] {
             assert_eq!(sign::verify_wrap(&k.public_key(), &changed, &sig), Err(Error::BadSignature));
         }
         assert_eq!(sign::verify_wrap(&key(9).public_key(), &st, &sig), Err(Error::BadSignature));
+        assert_eq!(sign::verify_wrap_for(&list, &[], &key(9).public_key(), &st, &sig), Err(Error::UntrustedSigner));
     }
+    // the anchor is trusted only when passed as anchor
+    let t = &doc["wrap"][2];
+    let (recipient, wrapped) = (hex(&t["recipient"]), hex(&t["wrapped"]));
+    let st = WrapStatement { context: text(&t["context"]), object_id: "01JCASE", version: 2, manifest: list.hash, recipient: &recipient, wrapped: &wrapped };
+    assert_eq!(sign::verify_wrap_for(&list, &[], &anchor(&doc), &st, &hex(&t["signature"])), Err(Error::UntrustedSigner));
+    // a key outside a member list (opaque Rust blob, largest version)
+    let t = &doc["wrap_opaque"];
+    let (recipient, wrapped, sig) = (hex(&t["recipient"]), hex(&t["wrapped"]), hex(&t["signature"]));
+    let st = WrapStatement {
+        context: text(&t["context"]),
+        object_id: text(&t["object_id"]),
+        version: t["version"].as_u64().unwrap(),
+        manifest: hex(&t["manifest"]).try_into().unwrap(),
+        recipient: &recipient,
+        wrapped: &wrapped,
+    };
+    assert_eq!(st.version, sign::MAX_VERSION);
+    assert_eq!(sign::sign_wrap(&seed(&t["seed"]), &st).unwrap().to_vec(), sig);
 }
 
 #[test]
@@ -113,7 +147,7 @@ fn signed_rust_wrapped_key() {
     let kek = Key::generate().unwrap();
     let inner = Key::generate().unwrap();
     let blob = wrap::wrap_key(&kek, &inner, b"demo/case/1").unwrap();
-    let st = WrapStatement { context: "demo/case/1", object_id: "1", version: 1, recipient: b"me", wrapped: &blob };
+    let st = WrapStatement { context: "demo/case/1", object_id: "1", version: 1, manifest: [0; 32], recipient: b"me", wrapped: &blob };
     let sig = sign::sign_wrap(&sender, &st).unwrap();
     sign::verify_wrap(&sender.public_key(), &st, &sig).unwrap();
     assert!(wrap::unwrap_key(&kek, &blob, b"demo/case/1").unwrap() == inner);
@@ -123,6 +157,10 @@ fn chain_of(doc: &Value) -> Vec<Vec<u8>> {
     doc["manifest"]["chain"].as_array().unwrap().iter().map(|c| hex(&c["blob"])).collect()
 }
 
+fn scope(doc: &Value) -> &str {
+    text(&doc["manifest"]["scope"])
+}
+
 fn anchor(doc: &Value) -> PublicKey {
     PublicKey::from_bytes(&hex(&doc["manifest"]["anchor"])).unwrap()
 }
@@ -130,7 +168,7 @@ fn anchor(doc: &Value) -> PublicKey {
 fn accepted(doc: &Value, upto: usize) -> Option<AcceptedManifest> {
     let blobs = chain_of(doc);
     let refs: Vec<&[u8]> = blobs.iter().take(upto).map(|b| b.as_slice()).collect();
-    (upto > 0).then(|| sign::verify_manifest_chain(&refs, &[anchor(doc)], None).unwrap())
+    (upto > 0).then(|| sign::verify_manifest_chain(&refs, scope(doc), &[anchor(doc)], None).unwrap())
 }
 
 #[test]
@@ -140,8 +178,9 @@ fn manifest_chain_from_typescript_is_accepted_and_reproduced() {
     let blobs = chain_of(&doc);
     let mut prev: Option<AcceptedManifest> = None;
     for (c, blob) in m["chain"].as_array().unwrap().iter().zip(&blobs) {
-        let a = sign::verify_manifest(blob, &[anchor(&doc)], prev.as_ref()).unwrap();
+        let a = sign::verify_manifest(blob, scope(&doc), &[anchor(&doc)], prev.as_ref()).unwrap();
         assert_eq!(to_hex(&a.hash), text(&c["hash"]));
+        assert_eq!(sign::manifest_fingerprint(&a), text(&c["fingerprint"]));
         assert_eq!(to_hex(a.signer.as_bytes()), text(&c["signer"]));
         assert_eq!(a.manifest.version, c["version"].as_u64().unwrap());
         assert_eq!(a.manifest.epoch, c["epoch"].as_u64().unwrap());
@@ -168,13 +207,16 @@ fn manifest_chain_from_typescript_is_accepted_and_reproduced() {
         prev = Some(a);
     }
     let refs: Vec<&[u8]> = blobs.iter().map(|b| b.as_slice()).collect();
-    let last = sign::verify_manifest_chain(&refs, &[anchor(&doc)], None).unwrap();
+    let last = sign::verify_manifest_chain(&refs, scope(&doc), &[anchor(&doc)], None).unwrap();
     assert_eq!(last, prev.clone().unwrap());
-    assert_eq!(sign::verify_manifest_chain(&[], &[], prev.as_ref()).unwrap(), last);
-    assert_eq!(sign::verify_manifest_chain(&[], &[], None), Err(Error::BadChain));
+    assert_eq!(sign::verify_manifest_chain(&[], scope(&doc), &[], prev.as_ref()).unwrap(), last);
+    assert_eq!(sign::verify_manifest_chain(&[], "other", &[], prev.as_ref()), Err(Error::BadChain));
+    assert_eq!(sign::verify_manifest_chain(&[], scope(&doc), &[], None), Err(Error::BadChain));
+    // the whole chain for another scope is refused at version 1
+    assert_eq!(sign::verify_manifest_chain(&refs, "dovernik|center|12|case|01JOTHER", &[anchor(&doc)], None), Err(Error::BadChain));
     // continuing from an already trusted list
     let one = accepted(&doc, 1).unwrap();
-    assert_eq!(sign::verify_manifest_chain(&refs[1..], &[], Some(&one)).unwrap(), last);
+    assert_eq!(sign::verify_manifest_chain(&refs[1..], scope(&doc), &[], Some(&one)).unwrap(), last);
 }
 
 #[test]
@@ -185,16 +227,16 @@ fn refused_manifests_are_refused_for_the_same_reason() {
         let prev = accepted(&doc, r["after"].as_u64().unwrap() as usize);
         let want = match text(&r["error"]) {
             "untrusted" => Error::UntrustedSigner,
-            "chain" => Error::BadChain,
+            "chain" | "scope" => Error::BadChain,
             e => panic!("{e}"),
         };
-        assert_eq!(sign::verify_manifest(&hex(&r["blob"]), &[anchor(&doc)], prev.as_ref()), Err(want), "{r}");
+        assert_eq!(sign::verify_manifest(&hex(&r["blob"]), scope(&doc), &[anchor(&doc)], prev.as_ref()), Err(want), "{r}");
     }
     let prev = accepted(&doc, m["rescue"]["after"].as_u64().unwrap() as usize).unwrap();
-    let rescue = sign::verify_manifest(&hex(&m["rescue"]["blob"]), &[anchor(&doc)], Some(&prev)).unwrap();
+    let rescue = sign::verify_manifest(&hex(&m["rescue"]["blob"]), scope(&doc), &[anchor(&doc)], Some(&prev)).unwrap();
     assert_eq!(rescue.signer, anchor(&doc));
     // without the anchor the coordinator could not be replaced by management
-    assert_eq!(sign::verify_manifest(&hex(&m["rescue"]["blob"]), &[], Some(&prev)), Err(Error::UntrustedSigner));
+    assert_eq!(sign::verify_manifest(&hex(&m["rescue"]["blob"]), scope(&doc), &[], Some(&prev)), Err(Error::UntrustedSigner));
 }
 
 #[test]
@@ -222,7 +264,8 @@ fn member(id: &str, admin: bool, k: &SigningKey) -> Member {
 fn manifest_rules() {
     let (a, b) = (key(1), key(2));
     let first = Manifest { scope: "demo|case|1".into(), version: 1, epoch: 0, prev: [0; 32], members: vec![member("b", true, &b)] };
-    let one = sign::verify_manifest(&sign::sign_manifest(&a, &first).unwrap(), &[a.public_key()], None).unwrap();
+    let sc = "demo|case|1";
+    let one = sign::verify_manifest(&sign::sign_manifest(&a, &first).unwrap(), sc, &[a.public_key()], None).unwrap();
     assert_eq!(one.manifest.member_by_key(&b.public_key()).unwrap().id, "b");
     assert!(one.manifest.member_by_key(&a.public_key()).is_none());
     let bad = |m: Manifest| sign::sign_manifest(&a, &m).unwrap_err();
@@ -234,20 +277,32 @@ fn manifest_rules() {
     assert_eq!(bad(Manifest { scope: String::new(), ..first.clone() }), Error::EmptyContext);
     assert_eq!(bad(Manifest { scope: "x".repeat(1025), ..first.clone() }), Error::Format);
     assert_eq!(bad(Manifest { members: vec![member("b", true, &b), member("b", false, &a)], ..first.clone() }), Error::Format);
+    assert_eq!(bad(Manifest { members: vec![member("b", true, &b), member("c", false, &b)], ..first.clone() }), Error::Format);
     assert_eq!(bad(Manifest { members: vec![member("", true, &b)], ..first.clone() }), Error::EmptyContext);
     assert_eq!(bad(Manifest { members: vec![Member { seal: vec![0; 1025], ..member("b", true, &b) }], ..first.clone() }), Error::Format);
-    let many: Vec<Member> = (0..1001).map(|i| member(&i.to_string(), false, &b)).collect();
+    let many: Vec<Member> = (0..1001u32).map(|i| member(&i.to_string(), false, &key((i % 250) as u8))).collect();
     assert_eq!(bad(Manifest { members: many, ..first.clone() }), Error::Format);
     // a member that is not admin cannot sign the next list; an admin can
     let next = Manifest::next(&one, vec![member("b", true, &b), member("c", false, &key(3))]);
     assert_eq!(next.version, 2);
-    assert_eq!(sign::verify_manifest(&sign::sign_manifest(&key(3), &next).unwrap(), &[a.public_key()], Some(&one)), Err(Error::UntrustedSigner));
-    let two = sign::verify_manifest(&sign::sign_manifest(&b, &next).unwrap(), &[], Some(&one)).unwrap();
+    assert_eq!(sign::verify_manifest(&sign::sign_manifest(&key(3), &next).unwrap(), sc, &[a.public_key()], Some(&one)), Err(Error::UntrustedSigner));
+    let two = sign::verify_manifest(&sign::sign_manifest(&b, &next).unwrap(), sc, &[], Some(&one)).unwrap();
     // another scope with the same version and link is not a continuation
     let other = Manifest { scope: "demo|case|2".into(), ..Manifest::next(&two, vec![]) };
-    assert_eq!(sign::verify_manifest(&sign::sign_manifest(&b, &other).unwrap(), &[], Some(&two)), Err(Error::BadChain));
-    // the same version twice (a fork) is refused
-    assert_eq!(sign::verify_manifest(&two.blob, &[], Some(&two)), Err(Error::BadChain));
+    assert_eq!(sign::verify_manifest(&sign::sign_manifest(&b, &other).unwrap(), sc, &[], Some(&two)), Err(Error::BadChain));
+    assert_eq!(sign::verify_manifest(&sign::sign_manifest(&b, &other).unwrap(), "demo|case|2", &[], Some(&two)), Err(Error::BadChain));
+    // the same version again is not a continuation
+    assert_eq!(sign::verify_manifest(&two.blob, sc, &[], Some(&two)), Err(Error::BadChain));
+    // a fork: two admins sign different version 3 – each alone is accepted; the lists differ in hash and code
+    let next3 = Manifest::next(&two, vec![member("b", true, &b), member("d", true, &key(4))]);
+    let fork_a = sign::verify_manifest(&sign::sign_manifest(&b, &next3).unwrap(), sc, &[], Some(&two)).unwrap();
+    let fork_b = sign::verify_manifest(&sign::sign_manifest(&a, &Manifest::next(&two, vec![member("b", true, &b)])).unwrap(), sc, &[a.public_key()], Some(&two)).unwrap();
+    assert_ne!(sign::manifest_fingerprint(&fork_a), sign::manifest_fingerprint(&fork_b));
+    // a key wrapped for one branch is not accepted by a member on the other branch
+    let st = WrapStatement { context: "c", object_id: "o", version: fork_a.manifest.epoch, manifest: fork_a.hash, recipient: b"r", wrapped: b"w" };
+    let sig = sign::sign_wrap(&b, &st).unwrap();
+    sign::verify_wrap_for(&fork_a, &[], &b.public_key(), &st, &sig).unwrap();
+    assert_eq!(sign::verify_wrap_for(&fork_b, &[], &b.public_key(), &st, &sig), Err(Error::BadChain));
 }
 
 #[test]
@@ -289,6 +344,7 @@ fn keys_are_kept_wrapped_or_derived() {
     assert_eq!(again.public_key(), k.public_key());
     assert_eq!(format!("{k:?}"), "SigningKey(***)");
     let d = SigningKey::derive(&master, "demo", "share").unwrap();
+    assert_ne!(d.public_key(), SigningKey::derive(&master, "demo", "share-2").unwrap().public_key());
     assert_eq!(d.public_key(), SigningKey::derive(&master, "demo", "share").unwrap().public_key());
     assert_ne!(d.public_key(), SigningKey::derive(&master, "demo", "center").unwrap().public_key());
     assert_ne!(d.public_key(), SigningKey::derive(&master, "other", "share").unwrap().public_key());
@@ -296,7 +352,7 @@ fn keys_are_kept_wrapped_or_derived() {
         assert_eq!(SigningKey::derive(&master, app, label).unwrap_err(), Error::Format, "{app} {label}");
     }
     assert_eq!(sign::sign_data(&k, "", b"x").unwrap_err(), Error::EmptyContext);
-    let st = WrapStatement { context: "c", object_id: "o", version: 1, recipient: b"", wrapped: b"w" };
+    let st = WrapStatement { context: "c", object_id: "o", version: 1, manifest: [0; 32], recipient: b"", wrapped: b"w" };
     assert_eq!(sign::sign_wrap(&k, &st).unwrap_err(), Error::Format);
     assert_eq!(sign::sign_wrap(&k, &WrapStatement { recipient: b"r", wrapped: b"", ..st }).unwrap_err(), Error::Format);
     assert_eq!(sign::sign_wrap(&k, &WrapStatement { recipient: b"r", version: sign::MAX_VERSION + 1, ..st }).unwrap_err(), Error::Format);

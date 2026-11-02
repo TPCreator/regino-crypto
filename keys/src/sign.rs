@@ -11,8 +11,9 @@
 //! - [`fingerprint`] – a short code of a public key ("3f2a 9c01 …", 80 bits) people compare by phone or
 //!   in person once, then pin.
 //! - [`sign_data`] / [`verify_data`] – a signature over data bound to a context.
-//! - [`sign_wrap`] / [`verify_wrap`] – the sender's signature over a key wrapped for a recipient
-//!   (context, object id, version, recipient public key, the sender's public key and the wrapped bytes).
+//! - [`sign_wrap`] / [`verify_wrap_for`] – the sender's signature over a key wrapped for a recipient
+//!   (context, object id, epoch, hash of the accepted member list, recipient public key, the sender's
+//!   public key and the wrapped bytes); accepted only from an admin of the list the recipient accepted.
 //! - [`Manifest`] – a signed list of members (scope, version, key epoch, hash of the previous list,
 //!   members with their public keys); [`verify_manifest`] / [`verify_manifest_chain`] accept a list only if
 //!   it continues one already trusted and is signed by one of its admins (or by an anchor).
@@ -23,7 +24,7 @@
 use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{Error, Key, KEY_LEN};
 
@@ -65,20 +66,23 @@ impl SigningKey {
 
     /// The seed – the only thing to store (wrapped).
     pub fn seed(&self) -> Key {
-        Key::from_bytes(self.0.to_bytes())
+        let bytes = Zeroizing::new(self.0.to_bytes());
+        Key::from_bytes(*bytes)
     }
 
     /// Signing key derived from a key the app keeps anyway (e.g. the master key) with HKDF-SHA256,
     /// info `<app> signing-key v1 <label>` (app: lowercase letters and digits; label: lowercase letters,
-    /// digits and `-`, e.g. `share`). The same key and label give the same signing key on every device.
+    /// digits and `-`, e.g. `share`). The same key and label give the same signing key on every device;
+    /// a new label (e.g. `share-2`) gives a new, unrelated signing key – the way to replace a derived key.
     pub fn derive(key: &Key, app: &str, label: &str) -> Result<SigningKey, Error> {
         if !crate::device::ok_name(app, 2) || app.contains('-') || !crate::device::ok_name(label, 3) {
             return Err(Error::Format);
         }
         let mut seed = Zeroizing::new([0u8; KEY_LEN]);
-        Hkdf::<Sha256>::new(None, key.as_bytes())
-            .expand(format!("{app} signing-key v1 {label}").as_bytes(), seed.as_mut())
-            .map_err(|_| Error::Format)?;
+        // the PRK is wiped here; the HMAC state inside `Hkdf` is wiped on drop (`hmac`/`sha2` feature `zeroize`)
+        let (mut prk, hk) = Hkdf::<Sha256>::extract(None, key.as_bytes());
+        prk.as_mut_slice().zeroize();
+        hk.expand(format!("{app} signing-key v1 {label}").as_bytes(), seed.as_mut()).map_err(|_| Error::Format)?;
         Ok(SigningKey(ed25519_dalek::SigningKey::from_bytes(&seed)))
     }
 
@@ -126,9 +130,13 @@ impl PublicKey {
 /// Short code of a public key for comparing by phone or in person: the first 80 bits of
 /// SHA-256(`regino signing fingerprint v1|` || key) as hex in groups of four ("3f2a 9c01 …").
 pub fn fingerprint(key: &PublicKey) -> String {
+    code(b"regino signing fingerprint v1|", key.as_bytes())
+}
+
+fn code(label: &[u8], bytes: &[u8]) -> String {
     let mut h = Sha256::new();
-    h.update(b"regino signing fingerprint v1|");
-    h.update(key.as_bytes());
+    h.update(label);
+    h.update(bytes);
     let d = h.finalize();
     let hex: Vec<String> = d[..10].chunks(2).map(|c| format!("{:02x}{:02x}", c[0], c[1])).collect();
     hex.join(" ")
@@ -183,6 +191,9 @@ pub struct WrapStatement<'a> {
     pub object_id: &'a str,
     /// Key version or epoch.
     pub version: u64,
+    /// [`AcceptedManifest::hash`] of the member list the sender had accepted as the latest when it wrapped
+    /// the key – the recipient takes the key only for the list it accepted itself (forks show up).
+    pub manifest: [u8; 32],
     /// The recipient's public key the key was wrapped for (e.g. 65-byte P-256 point).
     pub recipient: &'a [u8],
     pub wrapped: &'a [u8],
@@ -195,7 +206,7 @@ fn wrap_message(st: &WrapStatement, signer: &PublicKey) -> Result<Vec<u8>, Error
     let version = st.version.to_be_bytes();
     Ok(message(
         "wrap",
-        &[text(st.context, MAX_CONTEXT)?, text(st.object_id, MAX_CONTEXT)?, &version, st.recipient, signer.as_bytes(), st.wrapped],
+        &[text(st.context, MAX_CONTEXT)?, text(st.object_id, MAX_CONTEXT)?, &version, &st.manifest, st.recipient, signer.as_bytes(), st.wrapped],
     ))
 }
 
@@ -204,10 +215,30 @@ pub fn sign_wrap(key: &SigningKey, st: &WrapStatement) -> Result<[u8; SIGNATURE_
     Ok(key.sign_message(&wrap_message(st, &key.public_key())?))
 }
 
-/// The recipient checks the sender's signature before unwrapping. `signer` must be a key the app
-/// trusts for this object (pinned, or a member of an accepted [`Manifest`]).
+/// Checks the sender's signature only – **not** whether the sender may give this key. Apps use
+/// [`verify_wrap_for`]; this is for keys outside a member list.
 pub fn verify_wrap(signer: &PublicKey, st: &WrapStatement, signature: &[u8]) -> Result<(), Error> {
     signer.verify_message(&wrap_message(st, signer)?, signature)
+}
+
+/// The recipient checks a wrapped key against the member list it accepted itself as the latest:
+/// the statement must name that list (`manifest` = its hash) and its epoch (`version`), the signer must be
+/// an **admin** of that list or one of `anchors`, and the signature must be valid. `Error::BadChain` when
+/// the statement is for another list or epoch, `Error::UntrustedSigner` when the signer may not give it.
+pub fn verify_wrap_for(
+    list: &AcceptedManifest,
+    anchors: &[PublicKey],
+    signer: &PublicKey,
+    st: &WrapStatement,
+    signature: &[u8],
+) -> Result<(), Error> {
+    if st.manifest != list.hash || st.version != list.manifest.epoch {
+        return Err(Error::BadChain);
+    }
+    if !anchors.contains(signer) && !list.manifest.member_by_key(signer).is_some_and(|m| m.admin) {
+        return Err(Error::UntrustedSigner);
+    }
+    verify_wrap(signer, st, signature)
 }
 
 /// A member of a signed list.
@@ -233,7 +264,8 @@ pub struct Manifest {
     pub scope: String,
     /// 1 for the first list, then exactly +1 for every change.
     pub version: u64,
-    /// Key epoch of the object (never goes down).
+    /// Key epoch of the object: never goes down; the app raises it whenever someone is removed (and seals
+    /// new items only under the key of the new epoch). At most [`MAX_VERSION`].
     pub epoch: u64,
     /// [`AcceptedManifest::hash`] of the previous version; 32 zero bytes for version 1.
     pub prev: [u8; 32],
@@ -278,6 +310,12 @@ impl Manifest {
         if members.windows(2).any(|w| w[0].id == w[1].id) {
             return Err(Error::Format);
         }
+        // one signing key belongs to one member only
+        let mut keys: Vec<&[u8; 32]> = members.iter().map(|m| m.sign.as_bytes()).collect();
+        keys.sort();
+        if keys.windows(2).any(|w| w[0] == w[1]) {
+            return Err(Error::Format);
+        }
         let version = self.version.to_be_bytes();
         let epoch = self.epoch.to_be_bytes();
         let count = (members.len() as u32).to_be_bytes();
@@ -305,8 +343,9 @@ struct Reader<'a>(&'a [u8]);
 impl<'a> Reader<'a> {
     fn field(&mut self) -> Result<&'a [u8], Error> {
         let len = u32::from_be_bytes(self.0.get(..4).ok_or(Error::Format)?.try_into().map_err(|_| Error::Format)?) as usize;
-        let f = self.0.get(4..4 + len).ok_or(Error::Format)?;
-        self.0 = &self.0[4 + len..];
+        let end = len.checked_add(4).ok_or(Error::Format)?;
+        let f = self.0.get(4..end).ok_or(Error::Format)?;
+        self.0 = &self.0[end..];
         Ok(f)
     }
     fn fixed<const N: usize>(&mut self) -> Result<[u8; N], Error> {
@@ -361,17 +400,26 @@ pub fn open_manifest(blob: &[u8]) -> Result<AcceptedManifest, Error> {
     Ok(AcceptedManifest { manifest, signer, hash: Sha256::digest(blob).into(), blob: blob.to_vec() })
 }
 
-/// Accepts a list only if it continues what the app already trusts:
+/// Accepts a list only if it is for `scope` (the object the app asked for) and continues what the app
+/// already trusts:
 /// - `prev = None` (the first list the app sees for this scope): version 1, signed by one of `anchors`;
-/// - `prev = Some(p)`: the same scope, version `p + 1`, `prev` = hash of `p`, epoch not lower, signed by
+/// - `prev = Some(p)`: `p` for the same scope, version `p + 1`, `prev` = hash of `p`, epoch not lower, signed by
 ///   an admin of `p` or by one of `anchors`.
 ///
 /// `anchors` are keys the app trusts for the scope by itself (pinned after comparing [`fingerprint`]s,
 /// e.g. the centre's management). `Error::UntrustedSigner` when the signature is valid but the signer
 /// may not sign this list, `Error::BadChain` when it does not continue `prev`.
-pub fn verify_manifest(blob: &[u8], anchors: &[PublicKey], prev: Option<&AcceptedManifest>) -> Result<AcceptedManifest, Error> {
+///
+/// Two admins (or a removed admin together with a server that withholds the newer list) can sign two
+/// different lists with the same version; each member accepts the first it sees. The core cannot detect
+/// such a fork alone – wrapped keys name the list (`WrapStatement::manifest`), and the app compares the
+/// code of the latest list ([`manifest_fingerprint`]) with the coordinator (docs/SIGNING.md).
+pub fn verify_manifest(blob: &[u8], scope: &str, anchors: &[PublicKey], prev: Option<&AcceptedManifest>) -> Result<AcceptedManifest, Error> {
     let a = open_manifest(blob)?;
     let m = &a.manifest;
+    if m.scope != scope || prev.is_some_and(|p| p.manifest.scope != scope) {
+        return Err(Error::BadChain);
+    }
     let anchor = anchors.contains(&a.signer);
     match prev {
         None => {
@@ -383,7 +431,7 @@ pub fn verify_manifest(blob: &[u8], anchors: &[PublicKey], prev: Option<&Accepte
             }
         }
         Some(p) => {
-            if m.scope != p.manifest.scope || m.version != p.manifest.version + 1 || m.prev != p.hash || m.epoch < p.manifest.epoch {
+            if m.version != p.manifest.version + 1 || m.prev != p.hash || m.epoch < p.manifest.epoch {
                 return Err(Error::BadChain);
             }
             if !anchor && !p.manifest.member_by_key(&a.signer).is_some_and(|x| x.admin) {
@@ -396,10 +444,19 @@ pub fn verify_manifest(blob: &[u8], anchors: &[PublicKey], prev: Option<&Accepte
 
 /// Follows `blobs` in order from `trusted` (or from version 1 when `None`) and returns the last list.
 /// An empty chain returns `trusted` itself (`Error::BadChain` if there is none).
-pub fn verify_manifest_chain(blobs: &[&[u8]], anchors: &[PublicKey], trusted: Option<&AcceptedManifest>) -> Result<AcceptedManifest, Error> {
+pub fn verify_manifest_chain(blobs: &[&[u8]], scope: &str, anchors: &[PublicKey], trusted: Option<&AcceptedManifest>) -> Result<AcceptedManifest, Error> {
+    if trusted.is_some_and(|t| t.manifest.scope != scope) {
+        return Err(Error::BadChain);
+    }
     let mut cur = trusted.cloned();
     for b in blobs {
-        cur = Some(verify_manifest(b, anchors, cur.as_ref())?);
+        cur = Some(verify_manifest(b, scope, anchors, cur.as_ref())?);
     }
     cur.ok_or(Error::BadChain)
+}
+
+/// Short code of an accepted list ("3f2a 9c01 …", 80 bits of SHA-256(`regino manifest fingerprint v1|` ||
+/// hash)) – members compare it with the coordinator to be sure they all accepted the same list.
+pub fn manifest_fingerprint(list: &AcceptedManifest) -> String {
+    code(b"regino manifest fingerprint v1|", &list.hash)
 }
