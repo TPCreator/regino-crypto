@@ -196,11 +196,12 @@ fn manifest_chain_from_typescript_is_accepted_and_reproduced() {
                 admin: x["admin"].as_bool().unwrap(),
                 sign: PublicKey::from_bytes(&hex(&x["sign"])).unwrap(),
                 seal: hex(&x["seal"]),
+                seal_version: x["seal_version"].as_u64().unwrap(),
             })
             .collect();
         assert_eq!(a.manifest.members, members);
         // signing the same list again (members in reverse order – they are sorted) gives the same blob
-        let signer = [1u8, 2].into_iter().map(key).find(|k| k.public_key() == a.signer).unwrap();
+        let signer = [1u8, 2, 4].into_iter().map(key).find(|k| k.public_key() == a.signer).unwrap();
         let mut again = a.manifest.clone();
         again.members.reverse();
         assert_eq!(&sign::sign_manifest(&signer, &again).unwrap(), blob);
@@ -233,6 +234,9 @@ fn refused_manifests_are_refused_for_the_same_reason() {
         };
         assert_eq!(sign::verify_manifest(&hex(&r["blob"]), scope(&doc), &[anchor(&doc)], prev.as_ref()), Err(want), "{r}");
     }
+    // the first seal of a member (empty to a key) is accepted with a new epoch
+    let prev2 = accepted(&doc, m["first_seal"]["after"].as_u64().unwrap() as usize).unwrap();
+    sign::verify_manifest(&hex(&m["first_seal"]["blob"]), scope(&doc), &[], Some(&prev2)).unwrap();
     let prev = accepted(&doc, m["rescue"]["after"].as_u64().unwrap() as usize).unwrap();
     let rescue = sign::verify_manifest(&hex(&m["rescue"]["blob"]), scope(&doc), &[anchor(&doc)], Some(&prev)).unwrap();
     assert_eq!(rescue.signer, anchor(&doc));
@@ -258,7 +262,7 @@ fn damaged_manifests_are_refused() {
 }
 
 fn member(id: &str, admin: bool, k: &SigningKey) -> Member {
-    Member { id: id.into(), role: "member".into(), admin, sign: k.public_key(), seal: vec![] }
+    Member { id: id.into(), role: "member".into(), admin, sign: k.public_key(), seal: vec![], seal_version: 0 }
 }
 
 #[test]
@@ -280,7 +284,7 @@ fn manifest_rules() {
     assert_eq!(bad(Manifest { members: vec![member("b", true, &b), member("b", false, &a)], ..first.clone() }), Error::Format);
     assert_eq!(bad(Manifest { members: vec![member("b", true, &b), member("c", false, &b)], ..first.clone() }), Error::Format);
     assert_eq!(bad(Manifest { members: vec![member("", true, &b)], ..first.clone() }), Error::EmptyContext);
-    assert_eq!(bad(Manifest { members: vec![Member { seal: vec![0; 1025], ..member("b", true, &b) }], ..first.clone() }), Error::Format);
+    assert_eq!(bad(Manifest { members: vec![Member { seal: vec![0; 1025], seal_version: 1, ..member("b", true, &b) }], ..first.clone() }), Error::Format);
     let many: Vec<Member> = (0..1001u32).map(|i| member(&i.to_string(), false, &key((i % 250) as u8))).collect();
     assert_eq!(bad(Manifest { members: many, ..first.clone() }), Error::Format);
     // a member that is not admin cannot sign the next list; an admin can
@@ -386,29 +390,54 @@ fn removal_or_changed_seal_needs_a_new_epoch() {
     // adding a member keeps the epoch
     assert_eq!(check(Manifest::next(&one, vec![member("b", true, &b), member("c", false, &c), member("d", false, &key(4))])), Ok(()));
     // a changed sealing key needs a new epoch; a changed role or id alone does not
-    let new_seal = Member { seal: vec![1], ..member("c", false, &c) };
+    // (the first seal, empty to a key, counts as a change)
+    let new_seal = Member { seal: vec![1], seal_version: 1, ..member("c", false, &c) };
     assert_eq!(check(Manifest::next(&one, vec![member("b", true, &b), new_seal.clone()])), Err(Error::BadChain));
-    assert_eq!(check(Manifest { epoch: 5, ..Manifest::next(&one, vec![member("b", true, &b), new_seal]) }), Ok(()));
+    assert_eq!(check(Manifest { epoch: 5, ..Manifest::next(&one, vec![member("b", true, &b), new_seal.clone()]) }), Ok(()));
+    // seal version: 0 exactly for an empty seal; a new seal needs a higher version, an unchanged one the same
+    assert_eq!(sign::sign_manifest(&b, &Manifest::next(&one, vec![Member { seal_version: 1, ..member("c", false, &c) }])).unwrap_err(), Error::Format);
+    assert_eq!(sign::sign_manifest(&b, &Manifest::next(&one, vec![Member { seal_version: 0, ..new_seal.clone() }])).unwrap_err(), Error::Format);
+    let two = sign::verify_manifest(&sign::sign_manifest(&b, &Manifest { epoch: 5, ..Manifest::next(&one, vec![member("b", true, &b), new_seal.clone()]) }).unwrap(), sc, &[], Some(&one)).unwrap();
+    let check2 = |m: Manifest| sign::verify_manifest(&sign::sign_manifest(&b, &m).unwrap(), sc, &[], Some(&two)).map(|_| ());
+    let newer = Member { seal: vec![2], seal_version: 2, ..member("c", false, &c) };
+    assert_eq!(check2(Manifest { epoch: 6, ..Manifest::next(&two, vec![member("b", true, &b), Member { seal_version: 1, ..newer.clone() }]) }), Err(Error::BadChain));
+    assert_eq!(check2(Manifest { epoch: 6, ..Manifest::next(&two, vec![member("b", true, &b), newer]) }), Ok(()));
+    assert_eq!(check2(Manifest::next(&two, vec![member("b", true, &b), Member { seal_version: 3, ..new_seal }])), Err(Error::BadChain));
     assert_eq!(check(Manifest::next(&one, vec![member("b", true, &b), Member { role: "x".into(), ..member("c2", false, &c) }])), Ok(()));
 }
 
 #[test]
 fn member_keys_match_typescript() {
     let doc = vectors();
+    let lists: Vec<AcceptedManifest> = (1..=5).map(|n| accepted(&doc, n).unwrap()).collect();
     for t in doc["member_key"].as_array().unwrap() {
         let k = seed(&t["seed"]);
         let seal = hex(&t["seal"]);
         let mk = MemberKey { scope: text(&t["scope"]), member_id: text(&t["member_id"]), version: t["version"].as_u64().unwrap(), seal: &seal };
         let sig = hex(&t["signature"]);
         assert_eq!(sign::sign_member_key(&k, &mk).unwrap().to_vec(), sig);
-        assert_eq!(sign::sign_prepared(&k, &hex(&t["message"])).unwrap().to_vec(), sig);
-        let got = sign::verify_member_key(&k.public_key(), &mk, &sig, text(&doc["manifest"]["scope"]), t["last_version"].as_u64());
-        let want = if text(&t["expect"]) == "ok" { Ok(()) } else { Err(Error::BadChain) };
-        assert_eq!(got, want, "{t}");
+        assert_eq!(sign::sign_prepared(&k, &hex(&t["message"]), None).unwrap().to_vec(), sig);
+        let list = match t["list"].as_str() {
+            Some("v3") => Some(lists[2].manifest.clone()),
+            Some("v5") => Some(lists[4].manifest.clone()),
+            None => None,
+            l => panic!("{l:?}"),
+        };
+        let got = sign::verify_member_key(&k.public_key(), &mk, &sig, scope(&doc), text(&t["expected_member"]), list.as_ref());
+        let want = match text(&t["expect"]) {
+            "ok" => Ok(()),
+            "chain" => Err(Error::BadChain),
+            "untrusted" => Err(Error::UntrustedSigner),
+            e => panic!("{e}"),
+        };
+        assert_eq!(got, want, "{}", t["note"]);
         if want.is_ok() {
-            assert_eq!(sign::verify_member_key(&key(9).public_key(), &mk, &sig, mk.scope, None), Err(Error::BadSignature));
-            assert_eq!(sign::verify_member_key(&k.public_key(), &MemberKey { seal: b"x", ..mk }, &sig, mk.scope, None), Err(Error::BadSignature));
-            assert_eq!(sign::verify_member_key(&k.public_key(), &MemberKey { member_id: "1", ..mk }, &sig, mk.scope, None), Err(Error::BadSignature));
+            assert_eq!(sign::verify_member_key(&key(9).public_key(), &mk, &sig, mk.scope, mk.member_id, None), Err(Error::BadSignature));
+            assert_eq!(sign::verify_member_key(&k.public_key(), &MemberKey { seal: b"x", ..mk }, &sig, mk.scope, mk.member_id, None), Err(Error::BadSignature));
+            assert_eq!(sign::verify_member_key(&k.public_key(), &MemberKey { member_id: "1", ..mk }, &sig, mk.scope, "1", None), Err(Error::BadSignature));
+            let mut other_scope = list.clone().unwrap_or_else(|| lists[4].manifest.clone());
+            other_scope.scope = "other".into();
+            assert_eq!(sign::verify_member_key(&k.public_key(), &mk, &sig, mk.scope, mk.member_id, Some(&other_scope)), Err(Error::BadChain));
         }
     }
     let k = key(1);
@@ -423,17 +452,23 @@ fn prepared_messages_are_signed_like_typescript_and_others_refused() {
     let doc = vectors();
     let k = seed(&doc["prepared"]["seed"]);
     for t in doc["prepared"]["ok"].as_array().unwrap() {
-        assert_eq!(to_hex(&sign::sign_prepared(&k, &hex(&t["message"])).unwrap()), text(&t["signature"]), "{}", t["kind"]);
+        let prefix = text(&doc["prepared"]["data_prefix"]);
+        assert_eq!(to_hex(&sign::sign_prepared(&k, &hex(&t["message"]), Some(prefix)).unwrap()), text(&t["signature"]), "{}", t["kind"]);
+        assert_eq!(to_hex(&sign::sign_prepared(&k, &hex(&t["message"]), None).unwrap()), text(&t["signature"]), "{}", t["kind"]);
     }
     for t in doc["prepared"]["refused"].as_array().unwrap() {
-        assert_eq!(sign::sign_prepared(&k, &hex(&t["message"])), Err(Error::Format), "{}", t["case"]);
+        assert_eq!(sign::sign_prepared(&k, &hex(&t["message"]), None), Err(Error::Format), "{}", t["case"]);
     }
+    // data outside the allowed context prefix is refused only when a prefix is given
+    let outside = hex(&doc["prepared"]["outside_prefix"]);
+    assert_eq!(sign::sign_prepared(&k, &outside, Some("dovernik|")), Err(Error::Format));
+    assert!(sign::sign_prepared(&k, &outside, None).is_ok());
     // a manifest or wrap prepared for another signer is refused by this key
     let other = key(3);
     let wrap = &doc["prepared"]["ok"][1];
-    assert_eq!(sign::sign_prepared(&other, &hex(&wrap["message"])), Err(Error::Format));
+    assert_eq!(sign::sign_prepared(&other, &hex(&wrap["message"]), None), Err(Error::Format));
     let manifest = &doc["prepared"]["ok"][2];
-    assert_eq!(sign::sign_prepared(&other, &hex(&manifest["message"])), Err(Error::Format));
+    assert_eq!(sign::sign_prepared(&other, &hex(&manifest["message"]), None), Err(Error::Format));
     // the signed manifest message verifies as a list of the signer
     let mut blob = hex(&manifest["message"]);
     blob.extend(hex(&manifest["signature"]));

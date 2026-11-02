@@ -336,6 +336,8 @@ export interface Member {
   sign: Uint8Array;
   /** another public key the list vouches for, e.g. the P-256 key for `wrapForDevice`; may be empty */
   seal: Uint8Array;
+  /** version of the member's statement about `seal` (`MemberKey.version`); 0 exactly when `seal` is empty */
+  sealVersion: number;
 }
 
 export interface Manifest {
@@ -390,7 +392,10 @@ export function manifestMessage(m: Manifest, signer: Uint8Array): Uint8Array {
   if (keys.size !== members.length) throw new Error("Duplicate member signing key.");
   const fields = [text(m.scope, MAX_CONTEXT, "scope"), u64(m.version), u64(m.epoch), prev, signer, u32(members.length)];
   for (const { x, id } of members) {
-    fields.push(id, text(x.role, MAX_NAME, "role"), Uint8Array.of(x.admin ? 1 : 0), x.sign, bytes(x.seal, 0, MAX_KEY, "member key"));
+    const seal = bytes(x.seal, 0, MAX_KEY, "member key");
+    const sv = u64(x.sealVersion);
+    if ((seal.length === 0) !== (x.sealVersion === 0)) throw new Error("The seal version must be 0 exactly for an empty seal.");
+    fields.push(id, text(x.role, MAX_NAME, "role"), Uint8Array.of(x.admin ? 1 : 0), x.sign, sv, seal);
   }
   return message("manifest", fields);
 }
@@ -420,20 +425,29 @@ export async function signMemberKey(signer: Signer | Uint8Array, mk: MemberKey):
 }
 
 /**
- * Checks a member's statement about its sealing key: for `scope`, a version above `lastVersion` (the
- * highest accepted before for this member; none the first time) and a valid signature of `signer` (the
- * member's signing key from the list). An admin puts a `seal` into a list only after this. Throws.
+ * Checks a member's statement about its sealing key before an admin puts it into a list: for `scope` and
+ * the member `memberId` the admin means; if `list` (the latest list the admin accepted for this scope) has
+ * a member with that id, the version must be above its `sealVersion` (replay of an older statement) and
+ * `signer` must be that member's signing key – the last version comes from the signed list, not from
+ * local memory, so a new coordinator or a restored app refuses an older statement too; then the
+ * signature. Throws.
  */
 export async function verifyMemberKey(
   signer: Uint8Array,
   mk: MemberKey,
   signature: Uint8Array,
   scope: string,
-  lastVersion?: number,
+  memberId: string,
+  list?: Manifest,
 ): Promise<void> {
   const msg = memberKeyMessage(mk);
-  if (mk.scope !== scope) throw new Error("The member key is for another object.");
-  if (lastVersion !== undefined && !(mk.version > lastVersion)) throw new Error("The member key is not newer than the one accepted before.");
+  if (mk.scope !== scope || (list && list.scope !== scope)) throw new Error("The member key is for another object.");
+  if (mk.memberId !== memberId) throw new Error("The member key is for another member.");
+  const known = list?.members.find((x) => x.id === memberId);
+  if (known) {
+    if (!(mk.version > known.sealVersion)) throw new Error("The member key is not newer than the one in the list.");
+    if (!equalBytes(known.sign, signer)) throw new Error("The member key is not signed by that member.");
+  }
   if (!(await verifyEd25519(signer, msg, signature))) throw new Error("Invalid signature of the member key.");
 }
 
@@ -490,7 +504,9 @@ export async function openManifest(blob: Uint8Array): Promise<AcceptedManifest> 
       const role = r.text();
       const a = r.fixed(1)[0];
       if (a !== 0 && a !== 1) throw new Error();
-      members.push({ id, role, admin: a === 1, sign: r.fixed(32).slice(), seal: r.field().slice() });
+      const sign = r.fixed(32).slice();
+      const sealVersion = r.number();
+      members.push({ id, role, admin: a === 1, sign, seal: r.field().slice(), sealVersion });
     }
     if (!r.done) throw new Error();
     manifest = { scope, version, epoch, prev, members };
@@ -541,6 +557,12 @@ export async function verifyManifest(
       return !now || !equalBytes(now.seal, old.seal);
     });
     if (changed && m.epoch <= p.epoch) throw new Error("The member list does not continue the one already trusted (removal without a new epoch).");
+    // a new seal needs a higher sealVersion (no older statement brought back); an unchanged one keeps it
+    const badSealVersion = p.members.some((old) => {
+      const now = memberByKey(m, old.sign);
+      return now !== undefined && (equalBytes(now.seal, old.seal) ? now.sealVersion !== old.sealVersion : now.sealVersion <= old.sealVersion);
+    });
+    if (badSealVersion) throw new Error("The member list does not continue the one already trusted (seal version).");
     if (!anchor && !memberByKey(p, a.signer)?.admin) throw new Error("The signer of the member list is not trusted.");
   }
   return a;

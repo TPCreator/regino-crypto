@@ -34,8 +34,8 @@ checked by the app automatically.
 | `sign_data` / `signData`, `verify_data` / `verifyData` | Signature over data bound to a non-empty context. |
 | `sign_wrap` / `signWrap`, `verify_wrap` / `verifyWrap` | The sender's signature over a wrapped key (`WrapStatement`: context, object id, version (epoch), **hash of the member list the sender accepted as the latest**, recipient public key, the sender's own public key, the wrapped bytes). `verify_wrap` checks the signature only. |
 | `verify_wrap_for` (Rust), `signedWrapForDevice` / `openSignedWrap` (TS) | What apps use: the key must name the list the **recipient** accepted itself as the latest (its hash) and an epoch **not above** that list's epoch (earlier epochs are allowed, so a new member gets the older keys signed too – no separate key ring), the sender must be an **admin** of that list, the **signer of that list** (a coordinator who hands over in that version) or a passed anchor, the signature must be valid – only then is the key unwrapped. A member who is not admin cannot give a key. `openSignedWrap` returns the epoch. |
-| `sign_member_key` / `signMemberKey`, `verify_member_key` / `verifyMemberKey` | A member vouches for its own sealing key (`MemberKey`: scope, member id, version, seal key) with its signing key. Verification requires the expected scope and a version above the last one accepted for that member (replay refused). |
-| `Signer`, `seedSigner` (TS), `dataMessage` / `wrapMessage` / `manifestMessage` / `memberKeyMessage` (TS), `sign_prepared` (Rust) | Signing outside TypeScript: `signManifest`, `signedWrapForDevice` and `signMemberKey` take a `Signer` (`{ publicKey, sign(message) }`) or a seed. The message builders return the bytes to sign; `sign_prepared` in Rust signs only a well-formed, canonical message of a known kind that names its own key as the signer – not arbitrary bytes. |
+| `sign_member_key` / `signMemberKey`, `verify_member_key` / `verifyMemberKey` | A member vouches for its own sealing key (`MemberKey`: scope, member id, version, seal key) with its signing key. Verification takes the expected scope, the **expected member id** and the latest accepted list: the version must be above that member's `seal_version` **in the list** (replay refused even for a new coordinator or after a restore – nothing is kept only locally), and the signer must be that member's signing key. |
+| `Signer`, `seedSigner` (TS), `dataMessage` / `wrapMessage` / `manifestMessage` / `memberKeyMessage` (TS), `sign_prepared` (Rust) | Signing outside TypeScript: `signManifest`, `signedWrapForDevice` and `signMemberKey` take a `Signer` (`{ publicKey, sign(message) }`) or a seed. The message builders return the bytes to sign; `sign_prepared` in Rust signs only a well-formed, canonical message of a known kind that names its own key as the signer, and a `data` message only with a context under an allowed prefix when one is given (Dôverník: `dovernik|`). |
 | `manifest_fingerprint` / `manifestFingerprint` | `3f2a 9c01 …` – code of an accepted list (80 bits of SHA-256(`regino manifest fingerprint v1\|` ‖ hash)), compared with the coordinator to detect a fork. |
 | `sign_manifest` / `signManifest` | A signed member list (below). |
 | `verify_manifest` / `verifyManifest`, `verify_manifest_chain` / `verifyManifestChain` | Accept a list only if it is for the **expected scope** and continues one already trusted. |
@@ -59,7 +59,7 @@ another kind (`kind` is `data`, `wrap`, `manifest` or `member-key`). Numbers are
 | `data` | context (UTF-8, 1–1024 B), data |
 | `wrap` | context, object id (1–1024 B), version (u64), list hash (32 B), recipient public key (1–1024 B), signer public key (32 B), wrapped (1–65 536 B) |
 | `member-key` | scope (1–1024 B), member id (1–256 B), version (u64), seal key (1–1024 B) |
-| `manifest` | scope (1–1024 B), version (u64, ≥ 1), epoch (u64), prev (32 B), signer public key (32 B), member count (u32, ≤ 1000), then per member sorted by the UTF-8 bytes of the id: id (1–256 B, unique), role (1–256 B), admin (1 B: 0 or 1), signing key (32 B, unique in the list), seal key (0–1024 B) |
+| `manifest` | scope (1–1024 B), version (u64, ≥ 1), epoch (u64), prev (32 B), signer public key (32 B), member count (u32, ≤ 1000), then per member sorted by the UTF-8 bytes of the id: id (1–256 B, unique), role (1–256 B), admin (1 B: 0 or 1), signing key (32 B, unique in the list), seal version (u64; 0 exactly when the seal is empty), seal key (0–1024 B) |
 
 Texts are UTF-8 exactly as given – a leading U+FEFF is kept, not stripped, on both sides.
 
@@ -100,7 +100,9 @@ version and give keys). Roles are the app's own words; the core does not interpr
   one of `anchors`;
 - **with `prev`**: version = prev + 1, `prev` = hash of the trusted list, epoch not lower, signed by an
   **admin of the trusted list** or by an **anchor**; and if a signing key of the trusted list is missing
-  (someone removed) or a member's `seal` changed, the epoch must be **higher** (`BadChain` otherwise).
+  (someone removed) or a member's `seal` changed, the epoch must be **higher** (`BadChain` otherwise);
+  a changed `seal` also needs a higher `seal_version`, an unchanged one the same. The **first seal**
+  of a member (empty → a key) counts as a change: it needs a new epoch and a seal version ≥ 1.
 
 `anchors` are keys the app trusts for the scope on its own – pinned after a fingerprint comparison
 (e.g. the centre's management) – and are passed per call. An anchor may sign any next version, so a
@@ -117,6 +119,10 @@ the remaining members. Maximum 2^53 − 1.
 the new coordinator is admin and it may be absent itself; because it signed n + 1, its wrapped keys
 for n + 1 are still accepted (`verify_wrap_for` allows the list's signer). The new coordinator signs
 everything after that.
+
+The outgoing coordinator **knows the key of the new epoch** it created in n + 1 (it wrapped it). If it
+must really be excluded from what follows, the new coordinator rotates the epoch once more in n + 2
+(a new key wrapped only for the remaining members) and items from then on are sealed under that key.
 
 **Forks.** The chain rule cannot stop two lists with the same version: two admins may each sign their
 own version n + 1, or a removed admin X signs a version n + 1′ while the server withholds the real
@@ -174,15 +180,22 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   a therapist and after a restore – and exposes one command that calls `sign::sign_prepared`. TypeScript
   never sees a seed: it builds the message (`wrapMessage`, `manifestMessage`, `memberKeyMessage`) inside
   `signManifest` / `signedWrapForDevice` / `signMemberKey` with a `Signer` whose `sign` calls that
-  command, and does all **verifying** itself. `sign_prepared` refuses anything that is not a canonical
-  message of a known kind naming this key as the signer. To replace the key, derive with a new label.
+  command, and does all **verifying** itself. The command calls `sign_prepared(&key, msg,
+  Some("dovernik|"))`, which refuses anything that is not a canonical message of a known kind naming
+  this key as the signer, and `data` outside `dovernik|…` contexts. This is **not** a guard against the
+  web view itself: code running there can still get any statement of these kinds signed (a list, a
+  wrapped key, a member key); it only stops the command from signing arbitrary bytes or messages of other
+  protocols. The app keeps the web view's code trusted (no remote content, CSP). To replace the key,
+  derive with a new label.
 - **The P-256 sharing key goes into the `seal` field of the member's entry** in the centre's (and the
   case's) signed list. The member first vouches for it with `signMemberKey({ scope, memberId, version,
-  seal })`; an admin puts a `seal` into a list **only with a valid `verifyMemberKey` statement of a
-  higher version** than the one it accepted before for that member (it keeps the last version per
-  member). A new sharing key (e.g. after a restore) therefore needs a new statement and a new list
-  version with a new epoch; a server cannot bring back an older key. A bare `signData` over the key is
-  not used (no version, could be replayed).
+  seal })`; an admin puts a `seal` into a list **only after `verifyMemberKey(signer, statement, sig,
+  scope, memberId, acceptedList)`** – the version must be above that member's `sealVersion` in the
+  accepted list, and the new list carries the statement's version as `sealVersion`. A new sharing key
+  (e.g. after a restore) therefore needs a new statement and a new list version with a new epoch; a
+  server cannot bring back an older key, not even to a new coordinator or a restored app, because the
+  last version is in the signed list. The first sharing key of a member is a change as well (new
+  epoch). A bare `signData` over the key is not used (no version, could be replayed).
 - **Centre key / management:** the centre's member list is a manifest (scope `dovernik|center|<centre>`,
   sealing keys of members in `seal`) signed by management (admins); the management keys are the anchors every member pins once when
   joining the centre (fingerprint comparison, like `center_key_pin` today). A new key of the centre
@@ -227,7 +240,8 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   down; forks are not detected by the core – keys are bound to the list hash and apps compare the list
   code (is that sufficient, or should lists be countersigned by members?).
 - Deriving the signing key from the master key (HKDF with a separate label) vs. a random wrapped key.
-- `sign_prepared`: is parsing and rebuilding the message (known kind, field count, own key as signer,
-  canonical manifest) enough to keep a signing command exposed to the web view from being misused?
+- `sign_prepared`: parsing and rebuilding the message (known kind, field count, own key as signer,
+  canonical manifest, optional `data` prefix) limits a signing command exposed to the web view to these
+  statements – is that the right boundary?
 - The epoch rule (removal or changed seal ⇒ higher epoch) and wraps of earlier epochs bound to the
   latest list.

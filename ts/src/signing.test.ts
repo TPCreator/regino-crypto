@@ -171,7 +171,7 @@ describe('signed wrapped keys', () => {
     const dev = await newDeviceKeys();
     const devPub = await publicKeyBytes(dev.publicKey);
     const [x, y, mgmt] = [newSigningKey(), newSigningKey(), newSigningKey()];
-    const m = async (id: string, admin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin, sign: await signingPublicKey(k), seal: devPub });
+    const m = async (id: string, admin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin, sign: await signingPublicKey(k), seal: devPub, sealVersion: 1 });
     const sc = 'demo|case|h';
     const one = await verifyManifest(await signManifest(mgmt, { scope: sc, version: 1, epoch: 3, prev: new Uint8Array(32), members: [await m('x', true, x), await m('y', false, y)] }), sc, [await signingPublicKey(mgmt)]);
     const old = newGroupKey();
@@ -231,7 +231,7 @@ describe('signed wrapped keys', () => {
     const devPub = await publicKeyBytes(dev.publicKey);
     const groupKey = newGroupKey();
     const [admin, member, mgmt] = [newSigningKey(), newSigningKey(), newSigningKey()];
-    const m = async (id: string, isAdmin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin: isAdmin, sign: await signingPublicKey(k), seal: devPub });
+    const m = async (id: string, isAdmin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin: isAdmin, sign: await signingPublicKey(k), seal: devPub, sealVersion: 1 });
     const sc = 'demo|case|1';
     const one = await verifyManifest(await signManifest(mgmt, { scope: sc, version: 1, epoch: 4, prev: new Uint8Array(32), members: [await m('a', true, admin), await m('b', false, member)] }), sc, [await signingPublicKey(mgmt)]);
     const ctx = 'demo|case|1|key|4';
@@ -271,7 +271,7 @@ describe('signed wrapped keys', () => {
 
   it('a fork: two lists with the same version – keys of one branch do not open on the other, codes differ', async () => {
     const [x, y, mgmt] = [newSigningKey(), newSigningKey(), newSigningKey()];
-    const m = async (id: string, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin: true, sign: await signingPublicKey(k), seal: new Uint8Array(0) });
+    const m = async (id: string, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin: true, sign: await signingPublicKey(k), seal: new Uint8Array(0), sealVersion: 0 });
     const sc = 'demo|case|9';
     const one = await verifyManifest(await signManifest(mgmt, { scope: sc, version: 1, epoch: 1, prev: new Uint8Array(32), members: [await m('x', x), await m('y', y)] }), sc, [await signingPublicKey(mgmt)]);
     const a = await verifyManifest(await signManifest(x, { ...nextManifest(one, [await m('x', x)]), epoch: 2 }), sc, [], one);
@@ -289,27 +289,35 @@ describe('signed wrapped keys', () => {
 });
 
 describe('member keys (shared vectors with Rust)', () => {
-  it('a member vouches for its sealing key: same bytes, no replay, no other scope', async () => {
+  it('a member vouches for its sealing key: same bytes, no replay (version from the list), no other scope or member', async () => {
+    const lists = { v3: (await accepted(3))!.manifest, v5: (await accepted(5))!.manifest };
     for (const t of v.member_key) {
       const mk: MemberKey = { scope: t.scope, memberId: t.member_id, version: t.version, seal: hexd(t.seal) };
       expect(hex(memberKeyMessage(mk))).toBe(t.message);
       const sig = await signMemberKey(hexd(t.seed), mk);
       expect(hex(sig)).toBe(t.signature);
       const p = await signingPublicKey(hexd(t.seed));
-      const run = verifyMemberKey(p, mk, sig, v.manifest.scope, t.last_version ?? undefined);
+      const list = t.list ? lists[t.list as 'v3' | 'v5'] : undefined;
+      const run = verifyMemberKey(p, mk, sig, v.manifest.scope, t.expected_member, list);
       if (t.expect === 'ok') {
         await run;
-        await expect(verifyMemberKey(await pub(9), mk, sig, mk.scope)).rejects.toThrow('Invalid signature');
-        await expect(verifyMemberKey(p, { ...mk, seal: te.encode('x') }, sig, mk.scope)).rejects.toThrow('Invalid signature');
-      } else await expect(run, JSON.stringify(t)).rejects.toThrow(t.expect === 'scope' ? 'another object' : 'not newer');
+        await expect(verifyMemberKey(await pub(9), mk, sig, mk.scope, mk.memberId)).rejects.toThrow('Invalid signature');
+        await expect(verifyMemberKey(p, { ...mk, seal: te.encode('x') }, sig, mk.scope, mk.memberId)).rejects.toThrow('Invalid signature');
+        await expect(verifyMemberKey(p, mk, sig, mk.scope, mk.memberId, { ...lists.v5, scope: 'other' })).rejects.toThrow('another object');
+      } else {
+        const want = { chain: /another object|another member|not newer/, untrusted: /not signed by that member/ }[t.expect as 'chain' | 'untrusted'];
+        await expect(run, t.note).rejects.toThrow(want);
+      }
     }
     await expect(signMemberKey(fill(1), { scope: 's', memberId: 'm', version: 1, seal: new Uint8Array(0) })).rejects.toThrow('member key');
     await expect(signMemberKey(fill(1), { scope: 's', memberId: '', version: 1, seal: Uint8Array.of(1) })).rejects.toThrow('must not be empty');
   });
 });
 
-const members = (c: { members: { id: string; role: string; admin: boolean; sign: string; seal: string }[] }): Member[] =>
-  c.members.map((m) => ({ id: m.id, role: m.role, admin: m.admin, sign: hexd(m.sign), seal: hexd(m.seal) }));
+const equalBytesHex = (x: Uint8Array, y: Uint8Array) => hex(x) === hex(y);
+
+const members = (c: { members: { id: string; role: string; admin: boolean; sign: string; seal: string; seal_version: number }[] }): Member[] =>
+  c.members.map((m) => ({ id: m.id, role: m.role, admin: m.admin, sign: hexd(m.sign), seal: hexd(m.seal), sealVersion: m.seal_version }));
 
 async function accepted(upto: number): Promise<AcceptedManifest | undefined> {
   if (upto === 0) return undefined;
@@ -329,7 +337,9 @@ describe('signed member lists (shared vectors with Rust)', () => {
       expect(a.manifest.epoch).toBe(c.epoch);
       expect(a.manifest.scope).toBe(v.manifest.scope);
       expect(a.manifest.members).toEqual(members(c));
-      const seed = [fill(1), fill(2)].find((s, i) => hex(a.signer) === v.keys[i]!.public)!;
+      const seeds = [fill(1), fill(2), fill(4)];
+      const pubs = await Promise.all(seeds.map((x) => signingPublicKey(x)));
+      const seed = seeds[pubs.findIndex((x) => equalBytesHex(x, a.signer))]!;
       const again: Manifest = { ...a.manifest, members: [...a.manifest.members].reverse() };
       expect(hex(await signManifest(seed, again))).toBe(c.blob);
       expect(await openManifest(hexd(c.blob))).toEqual(a);
@@ -351,6 +361,8 @@ describe('signed member lists (shared vectors with Rust)', () => {
       const want = { untrusted: 'not trusted', chain: 'does not continue', scope: 'another object' }[r.error]!;
       await expect(verifyManifest(hexd(r.blob), v.manifest.scope, [anchor], await accepted(r.after)), r.case).rejects.toThrow(want);
     }
+    // the first seal of a member (empty to a key) is accepted with a new epoch
+    expect((await verifyManifest(hexd(v.manifest.first_seal.blob), v.manifest.scope, [], await accepted(v.manifest.first_seal.after))).manifest.epoch).toBe(2);
     const prev = await accepted(v.manifest.rescue.after);
     const rescue = await verifyManifest(hexd(v.manifest.rescue.blob), v.manifest.scope, [anchor], prev);
     expect(rescue.signer).toEqual(anchor);
@@ -382,7 +394,7 @@ describe('signed member lists (shared vectors with Rust)', () => {
 
   it('rules for signing and for continuing a list', async () => {
     const [a, b, c] = [fill(1), fill(2), fill(3)];
-    const m = async (id: string, admin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'member', admin, sign: await signingPublicKey(k), seal: new Uint8Array(0) });
+    const m = async (id: string, admin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'member', admin, sign: await signingPublicKey(k), seal: new Uint8Array(0), sealVersion: 0 });
     const first: Manifest = { scope: 'demo|case|1', version: 1, epoch: 0, prev: new Uint8Array(32), members: [await m('b', true, b)] };
     const sc = 'demo|case|1';
     const one = await verifyManifest(await signManifest(a, first), sc, [await signingPublicKey(a)]);
@@ -398,7 +410,10 @@ describe('signed member lists (shared vectors with Rust)', () => {
     await expect(bad({ members: [await m('b', true, b), await m('b', false, a)] })).rejects.toThrow('Duplicate member id');
     await expect(bad({ members: [await m('b', true, b), await m('c', false, b)] })).rejects.toThrow('Duplicate member signing key');
     await expect(bad({ members: [await m('', true, b)] })).rejects.toThrow('must not be empty');
-    await expect(bad({ members: [{ ...(await m('b', true, b)), seal: new Uint8Array(1025) }] })).rejects.toThrow('member key');
+    await expect(bad({ members: [{ ...(await m('b', true, b)), seal: new Uint8Array(1025), sealVersion: 1 }] })).rejects.toThrow('member key');
+    await expect(bad({ members: [{ ...(await m('b', true, b)), sealVersion: 1 }] })).rejects.toThrow('seal version');
+    await expect(bad({ members: [{ ...(await m('b', true, b)), seal: Uint8Array.of(1) }] })).rejects.toThrow('seal version');
+    await expect(bad({ members: [{ ...(await m('b', true, b)), seal: Uint8Array.of(1), sealVersion: -1 }] })).rejects.toThrow('whole number');
     await expect(bad({ members: [{ ...(await m('b', true, b)), sign: new Uint8Array(32) }] })).rejects.toThrow('member signing');
     const many = await Promise.all(Array.from({ length: 1001 }, (_, i) => m(String(i), false, fill(i % 250))));
     await expect(bad({ members: many })).rejects.toThrow('Invalid manifest');
@@ -419,7 +434,7 @@ describe('signed member lists (shared vectors with Rust)', () => {
 
   it('a removal or a changed sealing key needs a new epoch; adding does not', async () => {
     const [a, b, c] = [fill(1), fill(2), fill(3)];
-    const m = async (id: string, admin: boolean, k: Uint8Array, seal = new Uint8Array(0)): Promise<Member> => ({ id, role: 'member', admin, sign: await signingPublicKey(k), seal });
+    const m = async (id: string, admin: boolean, k: Uint8Array, seal = new Uint8Array(0), sealVersion = seal.length ? 1 : 0): Promise<Member> => ({ id, role: 'member', admin, sign: await signingPublicKey(k), seal, sealVersion });
     const sc = 'demo|case|e';
     const one = await verifyManifest(await signManifest(a, { scope: sc, version: 1, epoch: 4, prev: new Uint8Array(32), members: [await m('b', true, b), await m('c', false, c)] }), sc, [await signingPublicKey(a)]);
     const check = async (x: Manifest) => verifyManifest(await signManifest(b, x), sc, [], one);
@@ -429,6 +444,12 @@ describe('signed member lists (shared vectors with Rust)', () => {
     await expect(check(nextManifest(one, [await m('b', true, b), await m('c', false, c, Uint8Array.of(1))]))).rejects.toThrow('new epoch');
     expect((await check({ ...nextManifest(one, [await m('b', true, b), await m('c', false, c, Uint8Array.of(1))]), epoch: 5 })).manifest.version).toBe(2);
     expect((await check(nextManifest(one, [await m('b', true, b), { ...(await m('c2', false, c)), role: 'x' }]))).manifest.version).toBe(2);
+    // seal version: a new seal needs a higher one, an unchanged seal keeps it
+    const two = await check({ ...nextManifest(one, [await m('b', true, b), await m('c', false, c, Uint8Array.of(1))]), epoch: 5 });
+    const check2 = async (x: Manifest) => verifyManifest(await signManifest(b, x), sc, [], two);
+    await expect(check2({ ...nextManifest(two, [await m('b', true, b), await m('c', false, c, Uint8Array.of(2), 1)]), epoch: 6 })).rejects.toThrow('seal version');
+    expect((await check2({ ...nextManifest(two, [await m('b', true, b), await m('c', false, c, Uint8Array.of(2), 2)]), epoch: 6 })).manifest.epoch).toBe(6);
+    await expect(check2(nextManifest(two, [await m('b', true, b), await m('c', false, c, Uint8Array.of(1), 3)]))).rejects.toThrow('seal version');
   });
 
   it('malformed blobs give the same verdict as in Rust', async () => {
