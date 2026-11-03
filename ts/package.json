@@ -1,6 +1,6 @@
 {
   "name": "@regino/crypto",
-  "version": "0.13.2",
+  "version": "0.13.3",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "type": "module",
@@ -9,7 +9,8 @@
   "scripts": {
     "test": "vitest run --coverage",
     "check": "tsc --noEmit",
-    "build:tool": "node tools/build.mjs"
+    "build:tool": "node tools/build.mjs",
+    "bench": "esbuild bench/chain.ts --bundle --platform=node --format=esm --outfile=bench/.out/chain.mjs --log-level=warning && node bench/.out/chain.mjs"
   },
   "devDependencies": {
     "@cyclonedx/cyclonedx-npm": "6.0.1",

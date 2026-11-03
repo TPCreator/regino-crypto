@@ -80,8 +80,30 @@ function point(bytes: Uint8Array): Point | null {
 
 /** A canonical point of prime order (not small order, no torsion component) – the same rule as in Rust. */
 export function isSigningPublicKey(key: Uint8Array): boolean {
-  const p = key instanceof Uint8Array && key.length === SIGNING_KEY_LEN ? point(key) : null;
-  return p !== null && !p.isSmallOrder() && p.isTorsionFree();
+  if (!(key instanceof Uint8Array) || key.length !== SIGNING_KEY_LEN) return false;
+  // The check is a pure function of the 32 bytes and costly (torsion check = a scalar multiplication),
+  // and a chain of lists repeats the same member keys in every version – remember the verdict (since 0.13.3).
+  const id = b64(key);
+  const known = keyCache.get(id);
+  if (known !== undefined) {
+    keyCache.delete(id); // least recently used goes first
+    keyCache.set(id, known);
+    return known;
+  }
+  const p = point(key);
+  const ok = p !== null && !p.isSmallOrder() && p.isTorsionFree();
+  keyCache.set(id, ok);
+  if (keyCache.size > SIGNING_KEY_CACHE) keyCache.delete(keyCache.keys().next().value as string);
+  return ok;
+}
+
+/** Most public-key verdicts kept by `isSigningPublicKey` (least recently used dropped first). */
+export const SIGNING_KEY_CACHE = 4096;
+const keyCache = new Map<string, boolean>();
+
+/** Forgets the remembered public-key verdicts (tests, benchmarks); results never depend on it. */
+export function clearSigningKeyCache(): void {
+  keyCache.clear();
 }
 
 function checkPublic(key: Uint8Array, what = "signing"): void {

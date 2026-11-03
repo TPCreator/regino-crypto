@@ -151,6 +151,30 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   it); once approved, the app pins the last hash and verifies later updates with `pinned_trusted`, so
   the anchor need not sign again.
 
+**Rules for the chain options (after the review of 0.13.2):**
+
+- **Anchors are not put into `signers`.** `signers` may sign any next version; an anchor there would
+  sign later versions even with `anchors_may_sign = false` and so undo that choice. Keep the two sets
+  disjoint (management keys that should sign every version go into `signers`, the key that vouches for
+  the chain into `anchors`).
+- **Pin the highest accepted version** – one hash, of the latest version, is enough (the `prev` links
+  fix all earlier ones); pinning an older version leaves the versions above it to the trust rules.
+- **Keep pins encrypted** (sealed in the app's own database with its keys, never in plain files or on
+  the server): with `pinned_trusted` a pin replaces the anchor requirement, so whoever can write a pin
+  can make the app trust a chain.
+- `signers` never start a chain: version 1 is taken with its own signer and the anchor requirement still
+  applies; a chain signed at version 1 by a key from `signers` (and not an anchor) is refused unless a
+  later version is signed by an anchor or a trusted pin matches.
+
+**Performance (0.13.3):** the check of a signing public key (canonical point, not of small order,
+torsion-free – a scalar multiplication) is a pure function of its 32 bytes; TypeScript remembers the
+verdict for the last 4096 keys (`SIGNING_KEY_CACHE`, `clearSigningKeyCache`), because a chain of lists
+repeats the same member keys in every version. Results never depend on the cache. Each version of a
+chain is decoded, re-encoded (canonical check) and its signature verified exactly once. Benchmark
+(`npm run bench` in `ts/`, `cargo run --release -p regino-keys --example bench_chain`): 15 members ×
+5 versions – TypeScript 115 ms before, 35 ms with an empty cache and 16 ms with a warm one; Rust 4.4 ms
+(no cache – it would need shared mutable state in the library for a gain of a few milliseconds).
+
 ## What it protects
 
 | Attack by the server (or someone controlling it) | With 0.13.0 |
