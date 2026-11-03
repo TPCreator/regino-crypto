@@ -1,0 +1,43 @@
+{
+  "version": "0.13.1",
+  "note": "Generated once by @regino/crypto 0.13.1; Rust and TypeScript must reproduce every value and verdict. Never change the expected values.",
+  "code": [
+    {
+      "key": "1111111111111111111111111111111111111111111111111111111111111111",
+      "context": "dovernik|center|12|case|01JCASE",
+      "code": "3b40 7f5e 09a5 944f 1b3a"
+    },
+    {
+      "key": "1111111111111111111111111111111111111111111111111111111111111111",
+      "context": "dovernik|center|12|case|01JOTHER",
+      "code": "5dd5 feff 7a8b 3f96 e020"
+    },
+    {
+      "key": "2222222222222222222222222222222222222222222222222222222222222222",
+      "context": "dovernik|center|12|case|01JCASE",
+      "code": "44f5 5ad5 0b51 280a 29ca"
+    },
+    {
+      "key": "1111111111111111111111111111111111111111111111111111111111111111",
+      "context": "ž|﻿x",
+      "code": "1535 bece 2f6b dfaa 49fa"
+    }
+  ],
+  "id": [
+    {
+      "key": "1111111111111111111111111111111111111111111111111111111111111111",
+      "label": "case slot v1|consent",
+      "id": "dfafda252e4e5570a73f73c3"
+    },
+    {
+      "key": "1111111111111111111111111111111111111111111111111111111111111111",
+      "label": "case slot v1|identification",
+      "id": "027ac95315791f1ce6b8da75"
+    },
+    {
+      "key": "2222222222222222222222222222222222222222222222222222222222222222",
+      "label": "case slot v1|consent",
+      "id": "dbda89e445f0547cc68cc678"
+    }
+  ]
+}

@@ -303,8 +303,12 @@ export async function openSignedWrap(
   objectId: string,
   list: AcceptedManifest,
   anchors: readonly Uint8Array[] = [],
+  opts: { recipientId?: string } = {},
 ): Promise<{ groupKey: Uint8Array; signer: Uint8Array; epoch: number }> {
   if (!signed || signed.v !== SIGNED_WRAP_VERSION) throw new Error("Unsupported signed wrapped key version.");
+  // since 0.13.1: the key must be for the member `recipientId` of the list, wrapped for the seal the list names
+  if (opts.recipientId !== undefined && !list.manifest.members.some((m) => m.id === opts.recipientId && m.seal.length > 0 && equalBytes(m.seal, devicePublic)))
+    throw new Error("The recipient is not a member of the list with this key.");
   let signer: Uint8Array;
   let sig: Uint8Array;
   let manifest: Uint8Array;
@@ -580,4 +584,46 @@ export async function verifyManifestChain(
   for (const b of blobs) cur = await verifyManifest(b, scope, anchors, cur);
   if (!cur) throw new Error("The member list does not continue the one already trusted.");
   return cur;
+}
+
+/** What the app already pinned for a scope: the highest accepted version and the hashes of its last
+ * versions (`hashes[i]` = hash of version `version - hashes.length + 1 + i`; one hash is enough). */
+export interface PinnedManifest {
+  version: number;
+  hashes: readonly Uint8Array[];
+}
+
+/**
+ * Verifies a whole chain from version 1 for someone who joins or restores and has no trusted list yet
+ * (identical to Rust `verify_manifest_chain_from_anchor`): version 1 is taken with its own signer, every
+ * later version must continue the previous one (`verifyManifest`), and at least one version must be
+ * **signed by an anchor** – that signature confirms all versions before it; without it nothing is
+ * accepted (fail-closed). With `pinned`, a different hash for a pinned version is a fork and a chain that
+ * ends before the pinned version means newer lists are withheld – both throw. Returns every accepted
+ * version, oldest first.
+ */
+export async function verifyManifestChainFromAnchor(
+  blobs: readonly Uint8Array[],
+  scope: string,
+  anchors: readonly Uint8Array[],
+  opts: { pinned?: PinnedManifest } = {},
+): Promise<AcceptedManifest[]> {
+  if (blobs.length === 0) throw new Error("The member list does not continue the one already trusted.");
+  const first = await openManifest(blobs[0]!);
+  if (first.manifest.scope !== scope) throw new Error("The member list is for another object.");
+  if (first.manifest.version !== 1) throw new Error("The member list does not continue the one already trusted.");
+  const out = [first];
+  for (const b of blobs.slice(1)) out.push(await verifyManifest(b, scope, anchors, out[out.length - 1]));
+  const p = opts.pinned;
+  if (p) {
+    const n = p.hashes.length;
+    if (!Number.isSafeInteger(p.version) || n === 0 || n > p.version) throw new Error("Invalid pinned versions.");
+    p.hashes.forEach((h, i) => {
+      const a = out[p.version - n + i];
+      if (a && !equalBytes(a.hash, h)) throw new Error("The member list does not continue the one already trusted (fork of a pinned version).");
+    });
+    if (out.length < p.version) throw new Error("Versions of the member list that were already accepted are missing (withheld).");
+  }
+  if (!out.some((a) => anchors.some((k) => equalBytes(k, a.signer)))) throw new Error("The signer of the member list is not trusted (no version signed by an anchor).");
+  return out;
 }

@@ -6,6 +6,7 @@
 //! - [`wrap`] – wrapping a key with another key and sealing data (XChaCha20-Poly1305, version in the header).
 //! - [`recovery`] – key from a recovery phrase (12 or 24 words) via HKDF-SHA256.
 //! - [`device`] – key from a secret held by the device (Windows Hello signature, passkey PRF) via HKDF-SHA256 – quick unlock.
+//! - [`group`] – code and id derived from a group key (comparing by phone, key-bound ids).
 //! - [`sign`] – Ed25519 signatures: personal signing key, fingerprint, signed wrapped keys, signed member lists.
 //! - [`shamir`] – splitting a key into N shares of which any K suffice (e.g. 2-of-3), with integrity check.
 //!
@@ -19,6 +20,7 @@ use zeroize::Zeroizing;
 pub mod backup_chunks;
 pub mod chunks;
 pub mod device;
+pub mod group;
 pub mod kdf;
 pub mod recovery;
 pub mod shamir;
@@ -84,4 +86,6 @@ pub enum Error {
     UntrustedSigner,
     #[error("The list does not continue the one already trusted.")]
     BadChain,
+    #[error("Versions of the list that were already accepted are missing (withheld).")]
+    Withheld,
 }

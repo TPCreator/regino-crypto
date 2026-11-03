@@ -40,6 +40,9 @@ checked by the app automatically.
 | `sign_manifest` / `signManifest` | A signed member list (below). |
 | `verify_manifest` / `verifyManifest`, `verify_manifest_chain` / `verifyManifestChain` | Accept a list only if it is for the **expected scope** and continues one already trusted. |
 | `open_manifest` / `openManifest` | Read a blob the app accepted earlier and stored itself (checks format and signature, not trust). |
+| `verify_manifest_chain_from_anchor` / `verifyManifestChainFromAnchor` (0.13.1) | For someone who joins or restores without a trusted list: the whole chain from version 1, which is taken with its own signer; every later version must continue the previous one; at least one version must be **signed by an anchor** (its signature confirms all earlier versions through `prev`), otherwise nothing is accepted (fail-closed). With `pinned` (`{ version, hashes }` – the hashes of the last versions up to `version` the app accepted before; one is enough): another hash for a pinned version is a fork (`BadChain`), a chain shorter than the pinned version is withheld (Rust `Error::Withheld`). Returns all accepted versions. |
+| `verify_wrap_for_recipient` (Rust), `openSignedWrap(…, { recipientId })` (TS) (0.13.1) | In addition to the checks above: the recipient must be the member `recipientId` of the list and its `seal` must be the key the wrapped key is for. |
+| `group_key_code` / `groupKeyCode`, `group_key_id` / `groupKeyId` (0.13.1) | From a group key (e.g. the case key): a code for comparing by phone (80 bits, `3f2a 9c01 …`, HMAC-SHA256 over a context with a key from HKDF-SHA256 info `regino group-key code v1`) and a key-bound id of 24 hex characters (info `regino group-key id v1`, HMAC over a label). Independent of the sealing keys; replaces the use of `backupChunkName` for these purposes. |
 | `verifyEd25519` (TS) | The strict check behind all of the above. |
 
 ## Formats (exact bytes)
@@ -137,7 +140,10 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   list with a version it already has (the server must keep and return all lists; a member who gets a
   different blob for a known version raises an alarm);
 - an admin is removed together with a new key epoch, and the removal is made by the coordinator or
-  management, whose view other members can compare.
+  management, whose view other members can compare;
+- (0.13.1) a member who joins or restores verifies the whole chain with
+  `verify_manifest_chain_from_anchor` and passes the versions it pinned before: a fork of a pinned
+  version or a withheld newer list is refused instead of accepted silently.
 
 ## What it protects
 
@@ -182,7 +188,8 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   `signManifest` / `signedWrapForDevice` / `signMemberKey` with a `Signer` whose `sign` calls that
   command, and does all **verifying** itself. The command calls `sign_prepared(&key, msg,
   Some("dovernik|"))`, which refuses anything that is not a canonical message of a known kind naming
-  this key as the signer, and `data` outside `dovernik|…` contexts. This is **not** a guard against the
+  this key as the signer, and (since 0.13.1 for every kind) a `data` context, `wrap` context, `manifest`
+  scope or `member-key` scope outside `dovernik|…`. This is **not** a guard against the
   web view itself: code running there can still get any statement of these kinds signed (a list, a
   wrapped key, a member key); it only stops the command from signing arbitrary bytes or messages of other
   protocols. The app keeps the web view's code trusted (no remote content, CSP). To replace the key,

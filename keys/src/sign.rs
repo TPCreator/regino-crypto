@@ -247,6 +247,23 @@ pub fn verify_wrap_for(
     verify_wrap(signer, st, signature)
 }
 
+/// [`verify_wrap_for`] and also that the key was wrapped for the member `recipient_id` of that list: the
+/// member must be in the list and its `seal` must be the recipient key of the statement (`Error::BadChain`
+/// otherwise) – so a key wrapped for someone else's key, or for a key the list does not name, is refused.
+pub fn verify_wrap_for_recipient(
+    list: &AcceptedManifest,
+    anchors: &[PublicKey],
+    signer: &PublicKey,
+    st: &WrapStatement,
+    signature: &[u8],
+    recipient_id: &str,
+) -> Result<(), Error> {
+    if !list.manifest.members.iter().any(|m| m.id == recipient_id && !m.seal.is_empty() && m.seal == st.recipient) {
+        return Err(Error::BadChain);
+    }
+    verify_wrap_for(list, anchors, signer, st, signature)
+}
+
 /// A member vouches for its own sealing key: scope, its member id, a version that only goes up, the key.
 /// Signed with the member's signing key; an admin puts a `seal` into a list only with a valid statement of
 /// a higher version than the one it saw before (docs/SIGNING.md).
@@ -304,7 +321,8 @@ pub fn verify_member_key(
 /// `memberKeyMessage`, `dataMessage`) – for apps that keep the signing key in Rust. The message must be a
 /// well-formed `RGN-SIG1` message of a known kind with the right number of fields; a `wrap` or `manifest`
 /// must name this key as the signer, and a `manifest` must decode to a valid list; a `data` message must
-/// have a context starting with `data_prefix` when one is given (Dôverník: `dovernik|`). Anything else is
+/// have a context starting with `data_prefix` when one is given (Dôverník: `dovernik|`) – since 0.13.1 the
+/// same prefix is also required of the `wrap` context, the `manifest` scope and the `member-key` scope. Anything else is
 /// refused (`Error::Format`). This limits what a caller can get signed to statements of these kinds – it is
 /// still a signing service for any such statement the caller builds, so the app decides which
 /// statements to send (docs/SIGNING.md).
@@ -319,6 +337,7 @@ pub fn sign_prepared(key: &SigningKey, message: &[u8], data_prefix: Option<&str>
         fields.push(r.field()?);
     }
     let me = key.public_key();
+    let allowed = |field: &[u8]| data_prefix.is_none_or(|p| field.starts_with(p.as_bytes()));
     let again = match (kind, fields.as_slice()) {
         (b"data", [ctx, data]) => {
             let ctx = std::str::from_utf8(ctx).map_err(|_| Error::Format)?;
@@ -328,7 +347,7 @@ pub fn sign_prepared(key: &SigningKey, message: &[u8], data_prefix: Option<&str>
             data_message(ctx, data)?
         }
         (b"wrap", [ctx, id, ver, list, recipient, signer, wrapped]) => {
-            if *signer != me.as_bytes() {
+            if *signer != me.as_bytes() || !allowed(ctx) {
                 return Err(Error::Format);
             }
             let st = WrapStatement {
@@ -341,7 +360,7 @@ pub fn sign_prepared(key: &SigningKey, message: &[u8], data_prefix: Option<&str>
             };
             wrap_message(&st, &me)?
         }
-        (b"member-key", [scope, id, ver, seal]) => member_key_message(&MemberKey {
+        (b"member-key", [scope, id, ver, seal]) if allowed(scope) => member_key_message(&MemberKey {
             scope: std::str::from_utf8(scope).map_err(|_| Error::Format)?,
             member_id: std::str::from_utf8(id).map_err(|_| Error::Format)?,
             version: u64::from_be_bytes((*ver).try_into().map_err(|_| Error::Format)?),
@@ -349,7 +368,7 @@ pub fn sign_prepared(key: &SigningKey, message: &[u8], data_prefix: Option<&str>
         })?,
         (b"manifest", _) => {
             let (manifest, signer) = decode_manifest(message)?;
-            if signer != me {
+            if signer != me || !allowed(manifest.scope.as_bytes()) {
                 return Err(Error::Format);
             }
             manifest.message(&me)?
@@ -611,4 +630,61 @@ pub fn verify_manifest_chain(blobs: &[&[u8]], scope: &str, anchors: &[PublicKey]
 /// hash)) – members compare it with the coordinator to be sure they all accepted the same list.
 pub fn manifest_fingerprint(list: &AcceptedManifest) -> String {
     code(b"regino manifest fingerprint v1|", &list.hash)
+}
+
+/// What the app already pinned for a scope: the highest version it accepted and the hashes of its last
+/// versions (`hashes[i]` is the hash of version `version - hashes.len() + 1 + i`; one hash – of `version` –
+/// is enough, the chain links the earlier ones).
+#[derive(Clone, Debug, Default)]
+pub struct Pinned {
+    pub version: u64,
+    pub hashes: Vec<[u8; 32]>,
+}
+
+/// Verifies a whole chain from version 1 for someone who joins or restores and has no trusted list yet:
+/// - version 1 is taken with its own signer (scope, version 1, valid signature), every later version must
+///   continue the previous one ([`verify_manifest`]: admin of the previous version or an anchor);
+/// - at least one version must be **signed by an anchor** – that signature also confirms all versions
+///   before it (they are linked by `prev`); without it nothing is accepted (`Error::UntrustedSigner`);
+/// - with `pinned`: a different hash for a pinned version is a fork (`Error::BadChain`), a chain that ends
+///   before the pinned version means newer lists are withheld (`Error::Withheld`).
+///
+/// Returns every accepted version, oldest first; an empty chain is `Error::BadChain`.
+pub fn verify_manifest_chain_from_anchor(
+    blobs: &[&[u8]],
+    scope: &str,
+    anchors: &[PublicKey],
+    pinned: Option<&Pinned>,
+) -> Result<Vec<AcceptedManifest>, Error> {
+    let first = blobs.first().ok_or(Error::BadChain)?;
+    let a = open_manifest(first)?;
+    if a.manifest.scope != scope || a.manifest.version != 1 {
+        return Err(Error::BadChain);
+    }
+    let mut out = vec![a];
+    for b in &blobs[1..] {
+        let next = verify_manifest(b, scope, anchors, out.last())?;
+        out.push(next);
+    }
+    if let Some(p) = pinned {
+        let n = p.hashes.len() as u64;
+        if n == 0 || n > p.version {
+            return Err(Error::Format);
+        }
+        for (i, h) in p.hashes.iter().enumerate() {
+            let v = p.version - n + 1 + i as u64;
+            if let Some(a) = out.get((v - 1) as usize) {
+                if &a.hash != h {
+                    return Err(Error::BadChain);
+                }
+            }
+        }
+        if (out.len() as u64) < p.version {
+            return Err(Error::Withheld);
+        }
+    }
+    if !out.iter().any(|a| anchors.contains(&a.signer)) {
+        return Err(Error::UntrustedSigner);
+    }
+    Ok(out)
 }
