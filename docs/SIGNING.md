@@ -41,6 +41,8 @@ checked by the app automatically.
 | `verify_manifest` / `verifyManifest`, `verify_manifest_chain` / `verifyManifestChain` | Accept a list only if it is for the **expected scope** and continues one already trusted. |
 | `open_manifest` / `openManifest` | Read a blob the app accepted earlier and stored itself (checks format and signature, not trust). |
 | `verify_manifest_chain_from_anchor` / `verifyManifestChainFromAnchor` (0.13.1) | For someone who joins or restores without a trusted list: the whole chain from version 1, which is taken with its own signer; every later version must continue the previous one; at least one version must be **signed by an anchor** (its signature confirms all earlier versions through `prev`), otherwise nothing is accepted (fail-closed). With `pinned` (`{ version, hashes }` – the hashes of the last versions up to `version` the app accepted before; one is enough): another hash for a pinned version is a fork (`BadChain`), a chain shorter than the pinned version is withheld (Rust `Error::Withheld`). Returns all accepted versions. |
+| `ChainOptions` / `verify_manifest_chain_from_anchor_with` (Rust), options of `verifyManifestChainFromAnchor` (TS) (0.13.2) | Defaults keep 0.13.1. **`signers`**: keys that may sign any next version even when they are no admin of the previous one (e.g. management keys from the accepted centre list) – not for v1 nor for the anchor requirement. **`anchorsMaySign`** (default true): with false an anchor only meets the anchor requirement (e.g. by signing v1, vouching for what came before through `prev`); later versions are signed by an admin of the previous version or one of `signers`. **`pinnedTrusted`**: the pinned versions were accepted before – matching pins meet the anchor requirement and versions up to the pin are checked only for structure, signatures and links; versions above the pin need an admin of the previous version, `signers` or (with `anchorsMaySign`) an anchor. Fork → `BadChain`, withheld → `Withheld`, stranger above the pin → `UntrustedSigner`. |
+| `inspect_manifest_chain` / `inspectManifestChain` (0.13.2) | **Structure only, no trust**: scope, version + 1, links, epochs, seal versions, canonical blobs, signatures valid for the signer named in each blob, pins (fork, withheld); bad signature → `BadSignature`. Returns `{ version, epoch, signer, members, hash }` per version for a table management looks at after a restore. **The result is not trustworthy until someone approves it** – it must never be used to accept keys; after approval the app pins the hash of the last version and continues with `pinnedTrusted`. |
 | `verify_wrap_for_recipient` (Rust), `openSignedWrap(…, { recipientId })` (TS) (0.13.1) | In addition to the checks above: the recipient must be the member `recipientId` of the list and its `seal` must be the key the wrapped key is for. |
 | `group_key_code` / `groupKeyCode`, `group_key_id` / `groupKeyId` (0.13.1) | From a group key (e.g. the case key): a code for comparing by phone (80 bits, `3f2a 9c01 …`, HMAC-SHA256 over a context with a key from HKDF-SHA256 info `regino group-key code v1`) and a key-bound id of 24 hex characters (info `regino group-key id v1`, HMAC over a label). Independent of the sealing keys; replaces the use of `backupChunkName` for these purposes. |
 | `verifyEd25519` (TS) | The strict check behind all of the above. |
@@ -143,7 +145,11 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   management, whose view other members can compare;
 - (0.13.1) a member who joins or restores verifies the whole chain with
   `verify_manifest_chain_from_anchor` and passes the versions it pinned before: a fork of a pinned
-  version or a withheld newer list is refused instead of accepted silently.
+  version or a withheld newer list is refused instead of accepted silently;
+- (0.13.2) after a restore without any trusted list, management can look at the chain with
+  `inspect_manifest_chain` (a table of versions, signers and members – **untrusted** until they approve
+  it); once approved, the app pins the last hash and verifies later updates with `pinned_trusted`, so
+  the anchor need not sign again.
 
 ## What it protects
 

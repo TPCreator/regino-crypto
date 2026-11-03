@@ -590,27 +590,34 @@ pub fn verify_manifest(blob: &[u8], scope: &str, anchors: &[PublicKey], prev: Op
             }
         }
         Some(p) => {
-            if m.version != p.manifest.version + 1 || m.prev != p.hash || m.epoch < p.manifest.epoch {
-                return Err(Error::BadChain);
-            }
-            // someone removed, or a sealing key changed: the old key must not be used any more – new epoch
-            let removed_or_changed = p.manifest.members.iter().any(|old| m.member_by_key(&old.sign).is_none_or(|new| new.seal != old.seal));
-            if removed_or_changed && m.epoch <= p.manifest.epoch {
-                return Err(Error::BadChain);
-            }
-            // a new seal needs a higher seal_version (no older statement brought back); an unchanged one keeps it
-            let bad_seal_version = p.manifest.members.iter().any(|old| {
-                m.member_by_key(&old.sign).is_some_and(|new| if new.seal == old.seal { new.seal_version != old.seal_version } else { new.seal_version <= old.seal_version })
-            });
-            if bad_seal_version {
-                return Err(Error::BadChain);
-            }
+            continues(m, p)?;
             if !anchor && !p.manifest.member_by_key(&a.signer).is_some_and(|x| x.admin) {
                 return Err(Error::UntrustedSigner);
             }
         }
     }
     Ok(a)
+}
+
+/// The structural rules of a next version (no trust): version + 1, link to `p`, epoch not lower and higher
+/// on a removal or a changed seal, seal versions (`Error::BadChain`).
+fn continues(m: &Manifest, p: &AcceptedManifest) -> Result<(), Error> {
+    if m.scope != p.manifest.scope || m.version != p.manifest.version + 1 || m.prev != p.hash || m.epoch < p.manifest.epoch {
+        return Err(Error::BadChain);
+    }
+    // someone removed, or a sealing key changed: the old key must not be used any more – new epoch
+    let removed_or_changed = p.manifest.members.iter().any(|old| m.member_by_key(&old.sign).is_none_or(|new| new.seal != old.seal));
+    if removed_or_changed && m.epoch <= p.manifest.epoch {
+        return Err(Error::BadChain);
+    }
+    // a new seal needs a higher seal_version (no older statement brought back); an unchanged one keeps it
+    let bad_seal_version = p.manifest.members.iter().any(|old| {
+        m.member_by_key(&old.sign).is_some_and(|new| if new.seal == old.seal { new.seal_version != old.seal_version } else { new.seal_version <= old.seal_version })
+    });
+    if bad_seal_version {
+        return Err(Error::BadChain);
+    }
+    Ok(())
 }
 
 /// Follows `blobs` in order from `trusted` (or from version 1 when `None`) and returns the last list.
@@ -656,6 +663,38 @@ pub fn verify_manifest_chain_from_anchor(
     anchors: &[PublicKey],
     pinned: Option<&Pinned>,
 ) -> Result<Vec<AcceptedManifest>, Error> {
+    verify_manifest_chain_from_anchor_with(blobs, scope, anchors, &ChainOptions { pinned: pinned.cloned(), ..ChainOptions::default() })
+}
+
+/// Options of [`verify_manifest_chain_from_anchor_with`] (since 0.13.2). `ChainOptions::default()` gives
+/// the behaviour of 0.13.1.
+#[derive(Clone, Debug)]
+pub struct ChainOptions {
+    /// Versions the app accepted before (see [`Pinned`]).
+    pub pinned: Option<Pinned>,
+    /// Keys that may sign any next version even when they are no admin of the previous one (e.g. the
+    /// centre's management keys from the accepted centre list). Not used for version 1 nor for the anchor
+    /// requirement.
+    pub signers: Vec<PublicKey>,
+    /// `true` (default): anchors may sign any next version. `false`: an anchor counts only for the anchor
+    /// requirement (e.g. by signing version 1); later versions are signed only by an admin of the previous
+    /// version or by one of `signers`.
+    pub anchors_may_sign: bool,
+    /// The pinned versions were accepted before (their chain was verified then): when their hashes match,
+    /// the anchor requirement is met and versions up to the pinned one are checked only for structure,
+    /// signatures and links – not against anchors or admins. Versions above the pin follow the trust rules.
+    pub pinned_trusted: bool,
+}
+
+impl Default for ChainOptions {
+    fn default() -> Self {
+        ChainOptions { pinned: None, signers: Vec::new(), anchors_may_sign: true, pinned_trusted: false }
+    }
+}
+
+/// Structure of a chain from version 1 (scope, +1, links, epochs, seal versions, canonical blobs, valid
+/// signatures by the named signer) and the pins (fork → `BadChain`, shorter chain → `Error::Withheld`).
+fn chain_structure(blobs: &[&[u8]], scope: &str, pinned: Option<&Pinned>) -> Result<Vec<AcceptedManifest>, Error> {
     let first = blobs.first().ok_or(Error::BadChain)?;
     let a = open_manifest(first)?;
     if a.manifest.scope != scope || a.manifest.version != 1 {
@@ -663,9 +702,18 @@ pub fn verify_manifest_chain_from_anchor(
     }
     let mut out = vec![a];
     for b in &blobs[1..] {
-        let next = verify_manifest(b, scope, anchors, out.last())?;
+        let next = open_manifest(b)?;
+        continues(&next.manifest, out.last().expect("not empty"))?;
         out.push(next);
     }
+    check_pins(&out, pinned)?;
+    Ok(out)
+}
+
+/// Pins against an accepted or inspected chain: another hash for a pinned version → `BadChain`, a chain
+/// that ends before the pinned version → `Error::Withheld`, a pin without hashes or with more hashes than
+/// versions → `Error::Format`.
+fn check_pins(out: &[AcceptedManifest], pinned: Option<&Pinned>) -> Result<(), Error> {
     if let Some(p) = pinned {
         let n = p.hashes.len() as u64;
         if n == 0 || n > p.version {
@@ -673,18 +721,78 @@ pub fn verify_manifest_chain_from_anchor(
         }
         for (i, h) in p.hashes.iter().enumerate() {
             let v = p.version - n + 1 + i as u64;
-            if let Some(a) = out.get((v - 1) as usize) {
-                if &a.hash != h {
-                    return Err(Error::BadChain);
-                }
+            if out.get((v - 1) as usize).is_some_and(|a| &a.hash != h) {
+                return Err(Error::BadChain);
             }
         }
         if (out.len() as u64) < p.version {
             return Err(Error::Withheld);
         }
     }
-    if !out.iter().any(|a| anchors.contains(&a.signer)) {
+    Ok(())
+}
+
+/// [`verify_manifest_chain_from_anchor`] with options (since 0.13.2): extra `signers`, anchors that may sign
+/// only for the anchor requirement (`anchors_may_sign = false`), and pins that meet the anchor requirement
+/// (`pinned_trusted`). Every version above version 1 (and above the pin when `pinned_trusted`) must be
+/// signed by an admin of the previous version, by one of `signers` or – when `anchors_may_sign` – by an
+/// anchor (`Error::UntrustedSigner`); structural errors are `Error::BadChain`, withheld pinned versions
+/// `Error::Withheld`.
+pub fn verify_manifest_chain_from_anchor_with(blobs: &[&[u8]], scope: &str, anchors: &[PublicKey], opts: &ChainOptions) -> Result<Vec<AcceptedManifest>, Error> {
+    let trusted_upto = match (&opts.pinned, opts.pinned_trusted) {
+        (Some(p), true) => p.version,
+        _ => 1,
+    };
+    // structure and trust in one pass, so errors come in the same order as in 0.13.1
+    let first = blobs.first().ok_or(Error::BadChain)?;
+    let a = open_manifest(first)?;
+    if a.manifest.scope != scope || a.manifest.version != 1 {
+        return Err(Error::BadChain);
+    }
+    let mut out = vec![a];
+    for b in &blobs[1..] {
+        let next = open_manifest(b)?;
+        let p = out.last().expect("not empty");
+        if next.manifest.scope != scope {
+            return Err(Error::BadChain);
+        }
+        continues(&next.manifest, p)?;
+        if next.manifest.version > trusted_upto {
+            let s = &next.signer;
+            let ok = p.manifest.member_by_key(s).is_some_and(|m| m.admin) || opts.signers.contains(s) || (opts.anchors_may_sign && anchors.contains(s));
+            if !ok {
+                return Err(Error::UntrustedSigner);
+            }
+        }
+        out.push(next);
+    }
+    check_pins(&out, opts.pinned.as_ref())?;
+    let pin_meets = opts.pinned.is_some() && opts.pinned_trusted;
+    if !pin_meets && !out.iter().any(|a| anchors.contains(&a.signer)) {
         return Err(Error::UntrustedSigner);
     }
     Ok(out)
+}
+
+/// One version of a chain read by [`inspect_manifest_chain`] – **not trusted**: nobody vouched for the
+/// signers yet. For showing to management, who decide; never use it to open keys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InspectedManifest {
+    pub version: u64,
+    pub epoch: u64,
+    pub signer: PublicKey,
+    pub members: Vec<Member>,
+    pub hash: [u8; 32],
+}
+
+/// Structure only (since 0.13.2), for management after a restore: scope, version + 1, links, epochs and
+/// seal versions, canonical blobs, signatures valid for the signer named in each blob, pins (fork →
+/// `BadChain`, withheld → `Error::Withheld`); bad signature → `Error::BadSignature`. **No trust in the
+/// signers** – the result is not trustworthy until someone approves it; after approval the app pins the
+/// hash of the last version and continues with `pinned_trusted`.
+pub fn inspect_manifest_chain(blobs: &[&[u8]], scope: &str, pinned: Option<&Pinned>) -> Result<Vec<InspectedManifest>, Error> {
+    Ok(chain_structure(blobs, scope, pinned)?
+        .into_iter()
+        .map(|a| InspectedManifest { version: a.manifest.version, epoch: a.manifest.epoch, signer: a.signer, members: a.manifest.members, hash: a.hash })
+        .collect())
 }
