@@ -9,3 +9,4 @@ export * from './signed';
 export * from './sync';
 export * from './inbox';
 export * from './signing';
+export * from './groupKey';
