@@ -35,10 +35,13 @@ pub fn has_chunk(chunk_dir: &Path, name: &str) -> Result<bool, BackupError> {
     Ok(chunk_path(chunk_dir, name)?.is_file())
 }
 
-/// Writes a sealed chunk durably; returns `false` when it was already there (nothing written).
+/// Writes a sealed chunk durably; returns `false` when it was already there with the same size (nothing written).
 pub fn put_chunk(chunk_dir: &Path, name: &str, blob: &[u8]) -> Result<bool, BackupError> {
     let target = chunk_path(chunk_dir, name)?;
-    if target.is_file() {
+    // An existing file is trusted only when it has the expected size: the sealed blob of one content always has
+    // the same length, so a truncated or empty file (interrupted copy, sync glitch) is written again instead of
+    // being referenced by every later backup (0.13.4).
+    if fs::metadata(&target).is_ok_and(|m| m.is_file() && m.len() == blob.len() as u64) {
         return Ok(false);
     }
     fs::create_dir_all(chunk_dir)?;
@@ -62,10 +65,29 @@ pub fn read_chunk(chunk_dir: &Path, name: &str) -> Result<Vec<u8>, BackupError> 
 /// A backup that cannot be read keeps everything: the caller gets an error and deletes nothing.
 pub fn referenced_chunks(backup_dir: &Path, prefix: &str, ext: &str) -> Result<HashSet<String>, BackupError> {
     let mut set = HashSet::new();
-    for p in list_backups(backup_dir, prefix, ext)? {
-        let v: serde_json::Value = serde_json::from_slice(&fs::read(&p)?).map_err(|e| BackupError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+    let mut add = |v: &serde_json::Value| {
         if let Some(list) = v.get("chunks").and_then(|c| c.as_array()) {
             set.extend(list.iter().filter_map(|c| c.as_str()).map(str::to_string));
+        }
+    };
+    let listed = list_backups(backup_dir, prefix, ext)?;
+    for p in &listed {
+        let v: serde_json::Value = serde_json::from_slice(&fs::read(p)?).map_err(|e| BackupError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        add(&v);
+    }
+    // Copies the user made by hand in the same folder (`… - Copy.<ext>`, `… (1).<ext>`) do not match the strict
+    // name pattern, but their chunks must stay too (0.13.4). They are not ours to fail on: one that cannot be
+    // read or parsed is skipped.
+    if let Ok(entries) = fs::read_dir(backup_dir) {
+        let suffix = format!(".{ext}");
+        for e in entries.flatten() {
+            let p = e.path();
+            if listed.contains(&p) || !p.is_file() || !e.file_name().to_str().is_some_and(|n| n.ends_with(&suffix)) {
+                continue;
+            }
+            if let Some(v) = fs::read(&p).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+                add(&v);
+            }
         }
     }
     Ok(set)
@@ -134,6 +156,44 @@ mod tests {
         assert_eq!(read_chunk(&kd, &name(1)).unwrap(), b"one");
         assert!(read_chunk(&kd, &name(2)).is_err());
         assert!(put_chunk(&kd, "../../x", b"x").is_err());
+    }
+
+    /// 0.13.4: a copy of a backup made by hand in the backup folder keeps its chunks, although its name does not
+    /// match the pattern; a file with the extension that is not a backup is skipped and blocks nothing.
+    #[test]
+    fn hand_made_copies_keep_their_chunks() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, kd) = (root.path(), root.path().join("kusky"));
+        put_chunk(&kd, &name(1), b"one").unwrap();
+        put_chunk(&kd, &name(2), b"two").unwrap();
+        put_chunk(&kd, &name(3), b"three").unwrap();
+        write_backup(dir, "demo-", "demo", "demo-2026-10-02.demo", &manifest(&[name(1)]), 30).unwrap();
+        fs::write(dir.join("demo-2026-09-01 - Copy.demo"), manifest(&[name(2)])).unwrap();
+        fs::write(dir.join("demo-2026-09-01 (1).demo"), manifest(&[name(2)])).unwrap();
+        fs::write(dir.join("notes (old).demo"), b"not a backup").unwrap();
+        assert_eq!(gc_chunks(&kd, dir, "demo-", "demo", Duration::ZERO).unwrap(), 1);
+        assert!(has_chunk(&kd, &name(1)).unwrap() && has_chunk(&kd, &name(2)).unwrap() && !has_chunk(&kd, &name(3)).unwrap());
+        // once the copies are gone, their chunk goes too
+        fs::remove_file(dir.join("demo-2026-09-01 - Copy.demo")).unwrap();
+        fs::remove_file(dir.join("demo-2026-09-01 (1).demo")).unwrap();
+        assert_eq!(gc_chunks(&kd, dir, "demo-", "demo", Duration::ZERO).unwrap(), 1);
+        assert!(!has_chunk(&kd, &name(2)).unwrap());
+    }
+
+    /// 0.13.4: a truncated or empty chunk file is written again; one of the right size is left alone.
+    #[test]
+    fn damaged_chunk_is_rewritten() {
+        let root = tempfile::tempdir().unwrap();
+        let kd = root.path().join("kusky");
+        assert!(put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
+        assert!(!put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
+        fs::write(kd.join(format!("{}.rgb", name(1))), b"").unwrap();
+        assert!(put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
+        assert_eq!(read_chunk(&kd, &name(1)).unwrap(), b"sealed chunk");
+        fs::write(kd.join(format!("{}.rgb", name(1))), b"seal").unwrap();
+        assert!(put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
+        assert_eq!(read_chunk(&kd, &name(1)).unwrap(), b"sealed chunk");
+        assert!(!put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
     }
 
     #[test]
