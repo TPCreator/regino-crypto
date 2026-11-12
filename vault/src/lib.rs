@@ -195,7 +195,7 @@ impl Vault {
     pub fn all(&self, sql: &str, params: &[Value]) -> Result<Vec<Map<String, Value>>, Error> {
         let values = to_sql(params)?;
         let mut stmt = self.conn.prepare(sql)?;
-        let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+        let names: Vec<String> = stmt.column_names().map(|s| s.to_string()).collect();
         let mut rows = stmt.query(rusqlite::params_from_iter(values.iter()))?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {

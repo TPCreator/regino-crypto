@@ -24,6 +24,14 @@ allow = [
   "Zlib",
 ]
 
+# sqlcipher-src (from rusqlite 0.42 / libsqlite3-sys 0.40, since 0.13.4) declares the licences of everything it
+# ships: SQLCipher (BSD-3-Clause), SQLite ("blessing" – public domain, the same code as before, when it was bundled
+# inside libsqlite3-sys under MIT) and libtomcrypt (WTFPL – a crypto provider we do not build: we use vendored
+# OpenSSL). Allowed for this crate only.
+[[licenses.exceptions]]
+crate = "sqlcipher-src"
+allow = ["blessing", "WTFPL"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
