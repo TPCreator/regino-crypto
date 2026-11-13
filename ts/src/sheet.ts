@@ -1,12 +1,12 @@
 import qrcode from 'qrcode-generator';
-import { recoveryQrText, secretToWords } from './recovery';
+import { DEFAULT_LANGUAGE, recoveryQrText, secretToWords, type RecoveryLanguage } from './recovery';
 
 /**
  * Printable recovery sheet: numbered words + a QR code with the same code.
  * Everything is created locally (no network); the sheet is never stored – the app only shows it for printing.
  */
 
-/** Language of the printed sheet text. The recovery words themselves are always Slovak. */
+/** Language of the printed sheet text. The language of the recovery words is `SheetOptions.wordList`. */
 export type SheetLang = 'en' | 'sk';
 
 const TEXT = {
@@ -67,8 +67,13 @@ export interface SheetOptions {
   /** Whom the code belongs to, e.g. "Dr. Jane Smith – private practice" (optional) */
   owner?: string;
   createdAt?: Date;
-  /** Language of the printed text: 'en' (default) or 'sk'. The recovery words are always Slovak. */
+  /** Language of the printed text: 'en' (default) or 'sk'. */
   lang?: SheetLang;
+  /**
+   * Word list of the printed recovery words: 'sk' (default, as up to 0.13.x) or 'en' (since 0.14.0).
+   * Independent of `lang`; the QR code is the same for both.
+   */
+  wordList?: RecoveryLanguage;
 }
 
 const esc = (s: string) =>
@@ -78,7 +83,7 @@ const esc = (s: string) =>
 export async function recoverySheetHtml(secret: Uint8Array, opts: SheetOptions): Promise<string> {
   const lang: SheetLang = opts.lang ?? 'en';
   const t = TEXT[lang];
-  const words = await secretToWords(secret);
+  const words = await secretToWords(secret, opts.wordList ?? DEFAULT_LANGUAGE);
   const date = (opts.createdAt ?? new Date()).toLocaleDateString(t.locale);
   const items = words.map((w, i) => `<li><b>${i + 1}.</b> ${esc(w)}</li>`).join('');
   return `<section class="regino-sheet" lang="${lang}">
