@@ -1,0 +1,85 @@
+{
+  "version": "0.14.0",
+  "description": "Recovery code in English (regino-crypto 0.14.0). The same secret gives the same QR text and the same keys in every word list; only the words differ. Made by TypeScript (ts/src/recovery.ts), checked by ts/src/recoveryEn.test.ts and keys/tests/recovery_en_0_14_0.rs.",
+  "wordlists": {
+    "en": {
+      "source": "https://github.com/bitcoin/bips/blob/master/bip-0039/english.txt",
+      "license": "MIT (bip-0039.mediawiki: This BIP falls under the MIT License.)",
+      "sha256_of_file": "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda"
+    }
+  },
+  "app": "demo",
+  "codes": [
+    {
+      "secret": "000102030405060708090a0b0c0d0e0f",
+      "en": "abandon amount liar amount expire adjust cage candy arch gather drum buyer",
+      "sk": "abeceda batoh mreža batoh jedľa atlas cylinder dávka bivak korbáč hokej cválať",
+      "qr": "RGR1:AAAQEAYEAUDAOCAJBIFQYDIOB67EK",
+      "recovery_key": "4d5711cad6ba1e73e9417e9b796bce4e2f3e81b4208a436da51eaef046d55b59"
+    },
+    {
+      "secret": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc",
+      "en": "adapt explain ecology dinner glare old unfair empty expect road off suggest dash dolphin captain version oval census uncover inform arrest trash first nice",
+      "sk": "aréna jednota hrad halušky krajčír pätka verbovať hudobník jedáleň satelit paroh tapeta fúra hladký defekt vŕba pinzeta dlaň veľtrh lotos bobrík úsmev kaučuk otec",
+      "qr": "RGR1:AMFBCGA7EYWTIO2CJFIFOXTFNRZXVAMIR6LJ3JFLWK44BR6O2XOKWXY",
+      "recovery_key": "c07ca4086baaceeb8a801269e8d072869c8bf41fcea41afb1f763b435c478b38"
+    },
+    {
+      "secret": "9e885d952ad362caeb4efe34a8e91bd2",
+      "en": "ozone drill grab fiber curtain grace pudding thank cruise elder eight picnic",
+      "sk": "pitný hobby kronika kapela fosfor krosná pupienok trezor fixka hrmieť hriadeľ pomník",
+      "qr": "RGR1:T2EF3FJK2NRMV22O7Y2KR2I32IKAK",
+      "recovery_key": "a75f70d1592121e7d2cc904092dec350a054694f821f3b413dc373b4bf4beea1"
+    },
+    {
+      "secret": "68a79eaca2324873eacc50cb9c6eca8cc68ea5d936f98787c60c7ebc74e6ce7c",
+      "en": "hamster diagram private dutch cause delay private meat slide toddler razor book happy fancy gospel tennis maple dilemma loan word shrug inflict delay length",
+      "sk": "kurt gumička proces hora dilema geológ proces notár šperk tušenie robot chórista kúsok kábel krkavec tranzit návyk halier nábytok žltnúť smer losos geológ mozog",
+      "qr": "RGR1:NCTZ5LFCGJEHH2WMKDFZY3WKRTDI5JOZG34YPB6GBR7LY5HGZZ6AAWY",
+      "recovery_key": "60eba8e11a1dc5c64fabc481a805f6c8796144819c2ceda4e48e2919cf484844"
+    }
+  ],
+  "bip39_english": {
+    "source": "https://github.com/trezor/python-mnemonic/blob/master/vectors.json (MIT) – entropy and mnemonic only; regino-crypto does not use the BIP-39 seed (PBKDF2)",
+    "vectors": [
+      [
+        "00000000000000000000000000000000",
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+      ],
+      [
+        "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "legal winner thank year wave sausage worth useful legal winner thank yellow"
+      ],
+      [
+        "80808080808080808080808080808080",
+        "letter advice cage absurd amount doctor acoustic avoid letter advice cage above"
+      ],
+      [
+        "ffffffffffffffffffffffffffffffff",
+        "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
+      ],
+      [
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
+      ],
+      [
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote"
+      ],
+      [
+        "f30f8c1da665478f49b001d94c5fc452",
+        "vessel ladder alter error federal sibling chat ability sun glass valve picture"
+      ],
+      [
+        "f585c11aec520db57dd353c69554b21a89b20fb0650966fa0a9d6f74fd989d8f",
+        "void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold"
+      ]
+    ]
+  },
+  "ambiguous": {
+    "description": "12 four-letter prefixes that are a valid code (words and checksum) in both lists – wordsToSecretAuto refuses to pick one (ambiguous)",
+    "input": "matr pole seve sign agen rada mixe gara robo sort farm ener",
+    "sk": "79946efadff0095c9f41c7b2b94cc917",
+    "en": "8934f312e4204f61638afbbb39f14ca5"
+  }
+}

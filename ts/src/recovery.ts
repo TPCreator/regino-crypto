@@ -1,8 +1,9 @@
 import { equalBytes } from './bytes';
+import { WORDLIST_EN } from './wordlist-en';
 import { WORDLIST_SK } from './wordlist-sk';
 
 /**
- * Recovery code (same structure as BIP-39, Slovak list of 2048 words):
+ * Recovery code (same structure as BIP-39, a list of 2048 words – Slovak by default, English since 0.14.0):
  * - standard: 128 bits of randomness + 4 checksum bits = 132 bits = **12 words** (default),
  * - maximum security: 256 bits + 8 bits = 264 bits = **24 words**.
  * Checksum = the first bits of SHA-256 of the secret. On recovery, the length follows from the word count.
@@ -25,7 +26,30 @@ export function normalizeWord(word: string): string {
     .trim();
 }
 
-const BY_PREFIX = new Map(WORDLIST_SK.map((w, i) => [normalizeWord(w).slice(0, 4), i]));
+/**
+ * Language of the word list (since 0.14.0). Only the words differ: the secret, the checksum, the QR text
+ * and every key derived from the secret are the same in all languages. Default `'sk'` (the only list up
+ * to 0.13.x), so calls without a language behave exactly as before.
+ * - `'sk'`: the Slovak list (`wordlist-sk.ts`),
+ * - `'en'`: the standard BIP-39 English list (`wordlist-en.ts`, MIT).
+ */
+export type RecoveryLanguage = 'sk' | 'en';
+export const DEFAULT_LANGUAGE: RecoveryLanguage = 'sk';
+/** All word lists, in the order `wordsToSecretAuto` tries them. */
+export const RECOVERY_LANGUAGES: readonly RecoveryLanguage[] = ['sk', 'en'];
+
+const LISTS: Readonly<Record<RecoveryLanguage, readonly string[]>> = { sk: WORDLIST_SK, en: WORDLIST_EN };
+/** First 4 letters without diacritics (or the whole word if shorter) → index; unique in each list. */
+const BY_PREFIX: Readonly<Record<RecoveryLanguage, ReadonlyMap<string, number>>> = {
+  sk: new Map(WORDLIST_SK.map((w, i) => [normalizeWord(w).slice(0, 4), i])),
+  en: new Map(WORDLIST_EN.map((w, i) => [normalizeWord(w).slice(0, 4), i])),
+};
+
+/** The 2048 words of a language (throws for an unknown language). */
+export function recoveryWordList(lang: RecoveryLanguage = DEFAULT_LANGUAGE): readonly string[] {
+  if (!Object.hasOwn(LISTS, lang)) throw new Error(`Unknown recovery word list: ${String(lang)}.`);
+  return LISTS[lang];
+}
 
 export function newRecoverySecret(strength: RecoveryStrength = DEFAULT_STRENGTH): Uint8Array {
   const n = BYTES[strength];
@@ -48,13 +72,17 @@ async function checksumBits(secret: Uint8Array): Promise<string> {
 
 const toBits = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(2).padStart(8, '0')).join('');
 
-/** 16 or 32 bytes → 12 or 24 words (with diacritics, as in the word list). */
-export async function secretToWords(secret: Uint8Array): Promise<string[]> {
+/** 16 or 32 bytes → 12 or 24 words of the given list (with diacritics, as in the word list). */
+export async function secretToWords(
+  secret: Uint8Array,
+  lang: RecoveryLanguage = DEFAULT_LANGUAGE,
+): Promise<string[]> {
+  const list = recoveryWordList(lang);
   const count = strengthOf(secret);
   const bits = toBits(secret) + (await checksumBits(secret));
   const words: string[] = [];
   for (let i = 0; i < count; i++)
-    words.push(WORDLIST_SK[parseInt(bits.slice(i * 11, i * 11 + 11), 2)] as string);
+    words.push(list[parseInt(bits.slice(i * 11, i * 11 + 11), 2)] as string);
   return words;
 }
 
@@ -68,11 +96,17 @@ export type RecoveryError =
 /**
  * User input → 16 or 32 bytes (by word count: 12 or 24). Accepts words with or without
  * diacritics, in upper or lower case, separated by spaces, commas or new lines; the first
- * 4 letters of each word are enough. Also accepts the text from the recovery sheet QR code.
+ * 4 letters of each word are enough (a shorter word is typed whole). Also accepts the text from the
+ * recovery sheet QR code (the same in every language).
+ *
+ * `lang` selects the word list (default Slovak, as up to 0.13.x). An app that does not know which list
+ * the user's code comes from uses `wordsToSecretAuto`.
  */
 export async function wordsToSecret(
   input: string,
+  lang: RecoveryLanguage = DEFAULT_LANGUAGE,
 ): Promise<{ ok: true; secret: Uint8Array } | { ok: false; error: RecoveryError }> {
+  const list = recoveryWordList(lang);
   const qr = parseRecoveryQr(input);
   if (qr) {
     if (!qr.ok) return { ok: false, error: { code: 'qr' } };
@@ -86,10 +120,11 @@ export async function wordsToSecret(
   let bits = '';
   for (const [index, word] of words.entries()) {
     const n = normalizeWord(word);
-    const i = n.length >= 4 ? BY_PREFIX.get(n.slice(0, 4)) : undefined;
-    // If more than 4 letters are entered, the whole word must match, not just the prefix (typo protection).
-    const full = i === undefined ? undefined : normalizeWord(WORDLIST_SK[i] as string);
-    if (i === undefined || (n.length > 4 && full !== n)) {
+    const i = BY_PREFIX[lang].get(n.slice(0, 4));
+    // Exactly the first 4 letters, or the whole word – more letters must spell the whole word, not just
+    // start like it (typo protection). The Slovak words have at least 4 letters, so for them this is the
+    // rule of 0.13.x unchanged; an English word of 3 letters is typed whole.
+    if (i === undefined || (n.length !== 4 && normalizeWord(list[i] as string) !== n)) {
       return { ok: false, error: { code: 'unknown-word', index, word } };
     }
     bits += i.toString(2).padStart(11, '0');
@@ -100,6 +135,54 @@ export async function wordsToSecret(
   if (!equalBytes(enc.encode(await checksumBits(secret)), enc.encode(bits.slice(secret.length * 8))))
     return { ok: false, error: { code: 'checksum' } };
   return { ok: true, secret };
+}
+
+/** Error of `wordsToSecretAuto`: a `RecoveryError`, or words that are a valid code in more than one list. */
+export type RecoveryAutoError =
+  | RecoveryError
+  /**
+   * Valid (words and checksum) in more than one list – practically never happens with codes made by
+   * `secretToWords`, but possible. The caller tries each candidate (e.g. the one that unwraps the key or
+   * opens the backup – AEAD decides) or asks the user which language the code is in.
+   */
+  | { code: 'ambiguous'; candidates: { lang: RecoveryLanguage; secret: Uint8Array }[] };
+
+/**
+ * Like `wordsToSecret`, but the word list is recognised from the words (since 0.14.0): the code is
+ * decoded with every list in `languages` and accepted only when exactly one of them gives valid words
+ * **and** a valid checksum; a code valid in more than one list is never decoded silently
+ * (`ambiguous`). `lang` is the list that matched (`null` for the QR text, which has no language).
+ * When no list fits, the error of the list that got furthest is returned: `checksum` (all words known),
+ * else `unknown-word` with the highest index, else `count`.
+ */
+export async function wordsToSecretAuto(
+  input: string,
+  languages: readonly RecoveryLanguage[] = RECOVERY_LANGUAGES,
+): Promise<
+  { ok: true; secret: Uint8Array; lang: RecoveryLanguage | null } | { ok: false; error: RecoveryAutoError }
+> {
+  const langs = [...new Set(languages)];
+  if (!langs.length) throw new Error('At least one recovery word list is required.');
+  langs.forEach((l) => recoveryWordList(l));
+  if (parseRecoveryQr(input)) {
+    const r = await wordsToSecret(input);
+    return r.ok ? { ok: true, secret: r.secret, lang: null } : r;
+  }
+  const results = await Promise.all(langs.map(async (lang) => ({ lang, r: await wordsToSecret(input, lang) })));
+  const candidates: { lang: RecoveryLanguage; secret: Uint8Array }[] = [];
+  for (const { lang, r } of results) if (r.ok) candidates.push({ lang, secret: r.secret });
+  if (candidates.length === 1) {
+    const [c] = candidates as [{ lang: RecoveryLanguage; secret: Uint8Array }];
+    return { ok: true, secret: c.secret, lang: c.lang };
+  }
+  if (candidates.length > 1) return { ok: false, error: { code: 'ambiguous', candidates } };
+  const rank = (e: RecoveryError) => (e.code === 'checksum' ? Infinity : e.code === 'unknown-word' ? e.index : -1);
+  let best: RecoveryError | undefined;
+  for (const { r } of results) {
+    const e = (r as { ok: false; error: RecoveryError }).error;
+    if (!best || rank(e) > rank(best)) best = e;
+  }
+  return { ok: false, error: best as RecoveryError };
 }
 
 /*
