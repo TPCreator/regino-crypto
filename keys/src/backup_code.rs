@@ -262,8 +262,8 @@ mod tests {
     fn weights_are_distinct_and_non_zero() {
         let mut seen = [false; 32];
         seen[1] = true; // the weight of the check character
-        for i in 1..=15 {
-            let w = GF.0[i] as usize;
+        for &g in &GF.0[1..=15] {
+            let w = g as usize;
             assert!(w != 0 && !seen[w]);
             seen[w] = true;
         }
