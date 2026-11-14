@@ -1,8 +1,10 @@
 import qrcode from 'qrcode-generator';
+import { backupCodeQrText, formatBackupCode, isBackupCodeSecret } from './backupCode';
 import { DEFAULT_LANGUAGE, recoveryQrText, secretToWords, type RecoveryLanguage } from './recovery';
 
 /**
- * Printable recovery sheet: numbered words + a QR code with the same code.
+ * Printable recovery sheet: numbered words + a QR code with the same code. For a 16-character backup
+ * code (10-byte secret, since 0.15.0) the sheet shows the code in large print and its QR text `RGC1:…`.
  * Everything is created locally (no network); the sheet is never stored – the app only shows it for printing.
  */
 
@@ -21,6 +23,11 @@ const TEXT = {
 Do not photograph it or store it in the cloud, in e-mail or on your phone.`,
     howTo: `To recover, enter the words in order (the first 4 letters are enough, diacritics do not matter) or scan the QR code.
 The QR code contains only this code – no address, it opens nothing on the internet.`,
+    codeQrLabel: 'QR code of the backup code',
+    codeTitle: 'backup code',
+    chars: 'characters',
+    codeHowTo: `To restore, enter the 16 characters (hyphens, spaces and lower case do not matter; O = 0, I and L = 1) or scan the QR code.
+The QR code contains only this code – no address, it opens nothing on the internet.`,
   },
   sk: {
     locale: 'sk-SK',
@@ -33,13 +40,21 @@ The QR code contains only this code – no address, it opens nothing on the inte
 Nefoťte ho a neukladajte do cloudu, e-mailu ani do mobilu.`,
     howTo: `Pri obnove zadajte slová v poradí (stačia prvé 4 písmená, diakritika nevadí) alebo naskenujte QR kód.
 QR kód obsahuje len tento kód – žiadnu adresu, nič sa ním neotvára na internete.`,
+    codeQrLabel: 'QR kód kódu zálohy',
+    codeTitle: 'kód zálohy',
+    chars: 'znakov',
+    codeHowTo: `Pri obnove zadajte 16 znakov (pomlčky, medzery a malé písmená nevadia; O = 0, I a L = 1) alebo naskenujte QR kód.
+QR kód obsahuje len tento kód – žiadnu adresu, nič sa ním neotvára na internete.`,
   },
 } satisfies Record<SheetLang, Record<string, string>>;
 
-/** QR code modules (true = dark). Error correction "M" – still readable from slightly damaged paper. */
+/**
+ * QR code modules (true = dark). Error correction "M" – still readable from slightly damaged paper.
+ * Words (16/32 B) give `RGR1:…`, a backup code (10 B) gives `RGC1:…`.
+ */
 export async function recoveryQrMatrix(secret: Uint8Array): Promise<boolean[][]> {
   const qr = qrcode(0, 'M');
-  qr.addData(await recoveryQrText(secret), 'Alphanumeric');
+  qr.addData(isBackupCodeSecret(secret) ? backupCodeQrText(secret) : await recoveryQrText(secret), 'Alphanumeric');
   qr.make();
   const n = qr.getModuleCount();
   return Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => qr.isDark(r, c)));
@@ -56,7 +71,7 @@ export async function recoveryQrSvg(secret: Uint8Array, quiet = 4, lang: SheetLa
     }),
   );
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" role="img" aria-label="${TEXT[lang].qrLabel}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" role="img" aria-label="${isBackupCodeSecret(secret) ? TEXT[lang].codeQrLabel : TEXT[lang].qrLabel}">` +
     `<rect width="${size}" height="${size}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`
   );
 }
@@ -79,10 +94,11 @@ export interface SheetOptions {
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] as string);
 
-/** The whole recovery sheet as HTML (for printing on A4). */
+/** The whole recovery sheet as HTML (for printing on A4); a 10-byte secret gives the backup code sheet. */
 export async function recoverySheetHtml(secret: Uint8Array, opts: SheetOptions): Promise<string> {
   const lang: SheetLang = opts.lang ?? 'en';
   const t = TEXT[lang];
+  if (isBackupCodeSecret(secret)) return codeSheetHtml(secret, opts, lang);
   const words = await secretToWords(secret, opts.wordList ?? DEFAULT_LANGUAGE);
   const date = (opts.createdAt ?? new Date()).toLocaleDateString(t.locale);
   const items = words.map((w, i) => `<li><b>${i + 1}.</b> ${esc(w)}</li>`).join('');
@@ -102,5 +118,32 @@ export async function recoverySheetHtml(secret: Uint8Array, opts: SheetOptions):
 <div class="grid"><ol>${items}</ol><div class="qr">${await recoveryQrSvg(secret, 4, lang)}</div></div>
 <div class="warn"><b>${t.warnStrong}</b> ${t.warn}</div>
 <p class="small">${t.howTo}</p>
+</section>`;
+}
+
+/** Sheet of a 16-character backup code: the code in large monospace groups + its QR code. */
+async function codeSheetHtml(secret: Uint8Array, opts: SheetOptions, lang: SheetLang): Promise<string> {
+  const t = TEXT[lang];
+  const date = (opts.createdAt ?? new Date()).toLocaleDateString(t.locale);
+  const groups = formatBackupCode(secret)
+    .split('-')
+    .map((g) => `<span>${g}</span>`)
+    .join('<i>–</i>');
+  return `<section class="regino-sheet" lang="${lang}">
+<style>
+.regino-sheet{font:14px/1.45 system-ui,sans-serif;color:#000;background:#fff;max-width:180mm;margin:0 auto;padding:8mm}
+.regino-sheet h1{font-size:20px;margin:0 0 4px}.regino-sheet .who{margin:0 0 12px;color:#333}
+.regino-sheet .grid{display:flex;gap:10mm;align-items:center}
+.regino-sheet .code{flex:1;font:600 30px/1.2 ui-monospace,Consolas,monospace;letter-spacing:.08em;white-space:nowrap}
+.regino-sheet .code i{font-style:normal;color:#777;padding:0 .15em}
+.regino-sheet .qr{width:40mm;flex:none}.regino-sheet .qr svg{width:100%;height:auto;display:block}
+.regino-sheet .warn{border:2px solid #000;padding:8px 10px;margin-top:12px}
+.regino-sheet .small{font-size:12px;color:#333}
+</style>
+<h1>${esc(opts.appName)} – ${t.codeTitle}</h1>
+<p class="who">${opts.owner ? esc(opts.owner) + ' · ' : ''}${t.created} ${esc(date)} · 16 ${t.chars}</p>
+<div class="grid"><p class="code">${groups}</p><div class="qr">${await recoveryQrSvg(secret, 4, lang)}</div></div>
+<div class="warn"><b>${t.warnStrong}</b> ${t.warn}</div>
+<p class="small">${t.codeHowTo}</p>
 </section>`;
 }

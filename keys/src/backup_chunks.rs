@@ -2,11 +2,14 @@
 //! `ts/src/backupChunks.ts`, shared test vectors in `testvectors/regino/backup-chunks-0.11.0.json`).
 //!
 //! - Keys from the recovery code via HKDF-SHA256 (no salt, so the same content gets the same name in
-//!   every backup): info `<app> backup chunks v1[ k128]|enc` and `…|name`.
+//!   every backup): info `<app> backup chunks v1[ k128]|enc` and `…|name`. A 16-character backup code
+//!   (since 0.15.0) is first stretched by Argon2id with the fixed salt of the application
+//!   (`backup_code`), then the same HKDF with ` code16` ([`BackupChunkKeys::from_backup_code`]).
 //! - Name = hex(HMAC-SHA256(name key, content)) – 64 characters; thirty backups share one copy.
 //! - File `<name>.rgb` = `RGB1 | nonce (12) | AES-256-GCM(enc key, content, AAD = "RGB1|<app>|<name>")`.
 //!   Opening recomputes the name from the content (constant time).
 
+use crate::backup_code::{self, BackupCode};
 use crate::Error;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
@@ -43,12 +46,23 @@ impl BackupChunkKeys {
         if !valid_app(app) || !(secret.len() == 16 || secret.len() == 32) {
             return Err(Error::Format);
         }
-        let k128 = if secret.len() == 16 { " k128" } else { "" };
-        let hk = Hkdf::<Sha256>::new(Some(&[]), secret);
+        Self::derive(secret, if secret.len() == 16 { " k128" } else { "" }, app)
+    }
+
+    /// Keys for a 16-character backup code (one Argon2id with the fixed salt of the application).
+    pub fn from_backup_code(code: &BackupCode, app: &str) -> Result<BackupChunkKeys, Error> {
+        if !valid_app(app) {
+            return Err(Error::Format);
+        }
+        Self::derive(backup_code::base(code, app)?.as_bytes(), " code16", app)
+    }
+
+    fn derive(ikm: &[u8], kind: &str, app: &str) -> Result<BackupChunkKeys, Error> {
+        let hk = Hkdf::<Sha256>::new(Some(&[]), ikm);
         let mut enc = Zeroizing::new([0u8; 32]);
         let mut name = Zeroizing::new([0u8; 32]);
-        hk.expand(format!("{app} backup chunks v1{k128}|enc").as_bytes(), enc.as_mut()).map_err(|_| Error::Format)?;
-        hk.expand(format!("{app} backup chunks v1{k128}|name").as_bytes(), name.as_mut()).map_err(|_| Error::Format)?;
+        hk.expand(format!("{app} backup chunks v1{kind}|enc").as_bytes(), enc.as_mut()).map_err(|_| Error::Format)?;
+        hk.expand(format!("{app} backup chunks v1{kind}|name").as_bytes(), name.as_mut()).map_err(|_| Error::Format)?;
         Ok(BackupChunkKeys { app: app.to_string(), enc, name })
     }
 

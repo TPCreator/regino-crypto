@@ -1,0 +1,286 @@
+{
+  "version": "0.15.0",
+  "description": "Backup code of 16 characters (regino-crypto 0.15.0): Crockford Base32, 15 data characters (75 bits) + a GF(32) check character; keys through Argon2id v1.3 (output 32 B) and HKDF-SHA256. Made by TypeScript (ts/src/backupCode.ts, @noble/hashes 2.4.0), checked by ts/src/backupCode.test.ts and keys/tests/backup_code_0_15_0.rs (RustCrypto argon2 0.6).",
+  "app": "demo",
+  "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+  "check": "values v0..v15; sum over i<15 of alpha^(i+1)*v_i plus v15 = 0 in GF(32), x^5+x^2+1, alpha = 2",
+  "kdf": {
+    "default": {
+      "m": 32768,
+      "t": 2,
+      "p": 1
+    },
+    "min": {
+      "m": 19456,
+      "t": 2,
+      "p": 1
+    },
+    "max": {
+      "m": 131072,
+      "t": 8,
+      "p": 4,
+      "work": 262144
+    }
+  },
+  "derivations": {
+    "backup_key": "HKDF-SHA256(ikm = Argon2id(secret, header salt, header m/t/p), salt = empty, info = \"<app> backup v3 code16\")",
+    "app_salt": "SHA-256(\"regino backup-code salt v1|<app>\")[0..16]",
+    "base": "Argon2id(secret, app_salt, m = 32768, t = 2, p = 1)",
+    "id": "HKDF-SHA256(base, salt = empty, info = \"<app> backup-code id v1\")",
+    "chunk_keys": "HKDF-SHA256(base, salt = empty, info = \"<app> backup chunks v1 code16|enc\" / \"|name\")",
+    "aad": "\"<app>-backup|3|<createdAt>|code16|argon2id m=<m> t=<t> p=<p>|\" + base64(SHA-256(sorted chunk names joined by newline))"
+  },
+  "app_salt": "6beb4a38fa4cba36d2d9494cb76ea4fd",
+  "codes": [
+    {
+      "secret": "00000000000000000000",
+      "code": "0000-0000-0000-0000",
+      "qr": "RGC1:0000000000000000",
+      "accepted": [
+        "0000-0000-0000-0000",
+        "0000000000000000",
+        "0000000000000000",
+        "OOOO-OOOO-OOOO-OOOO",
+        " 0000 – 0000 – 0000 – 0000 ",
+        "rgc1:0000000000000000"
+      ],
+      "id": "ce8ff44b21f13334561d5132037b04c0e5546f284c9f5383dbfffec98dca85aa"
+    },
+    {
+      "secret": "ffffffffffffffffffe0",
+      "code": "ZZZZ-ZZZZ-ZZZZ-ZZZN",
+      "qr": "RGC1:ZZZZZZZZZZZZZZZN",
+      "accepted": [
+        "ZZZZ-ZZZZ-ZZZZ-ZZZN",
+        "ZZZZZZZZZZZZZZZN",
+        "zzzzzzzzzzzzzzzn",
+        "ZZZZ-ZZZZ-ZZZZ-ZZZN",
+        " ZZZZ – ZZZZ – ZZZZ – ZZZN ",
+        "rgc1:zzzzzzzzzzzzzzzn"
+      ],
+      "id": "949ce82fdc20c2f64b8892e9cb377dd9e857bcd9a96ae19d65b4cee251e31d30"
+    },
+    {
+      "secret": "0123456789abcdef0120",
+      "code": "04HM-ASW9-NF6Y-Y09F",
+      "qr": "RGC1:04HMASW9NF6YY09F",
+      "accepted": [
+        "04HM-ASW9-NF6Y-Y09F",
+        "04HMASW9NF6YY09F",
+        "04hmasw9nf6yy09f",
+        "O4HM-ASW9-NF6Y-YO9F",
+        " 04HM – ASW9 – NF6Y – Y09F ",
+        "rgc1:04hmasw9nf6yy09f"
+      ],
+      "id": "80e48f99ccf85dd0575b28872696ec5bf2e2b549066da4fce0cad625319fb2b8"
+    },
+    {
+      "secret": "73dcb88fcac796fd3f00",
+      "code": "EFEB-H3YA-RYBF-TFR2",
+      "qr": "RGC1:EFEBH3YARYBFTFR2",
+      "accepted": [
+        "EFEB-H3YA-RYBF-TFR2",
+        "EFEBH3YARYBFTFR2",
+        "efebh3yarybftfr2",
+        "EFEB-H3YA-RYBF-TFR2",
+        " EFEB – H3YA – RYBF – TFR2 ",
+        "rgc1:efebh3yarybftfr2"
+      ],
+      "id": "12617be6f1a7cc3c4ad81326195006291b15749ff69960f45c64952ec9198394"
+    },
+    {
+      "secret": "beb92a0cabbbc80a44a0",
+      "code": "QTWJ-M35B-QF40-MH57",
+      "qr": "RGC1:QTWJM35BQF40MH57",
+      "accepted": [
+        "QTWJ-M35B-QF40-MH57",
+        "QTWJM35BQF40MH57",
+        "qtwjm35bqf40mh57",
+        "QTWJ-M35B-QF4O-MH57",
+        " QTWJ – M35B – QF40 – MH57 ",
+        "rgc1:qtwjm35bqf40mh57"
+      ],
+      "id": "cc73ca559872102fb2cb202ddcd70ffe2564ab124366807c12b31f938ac91d2d"
+    }
+  ],
+  "invalid": [
+    {
+      "input": "",
+      "error": {
+        "code": "length",
+        "length": 0
+      }
+    },
+    {
+      "input": "04HM-ASW9-NF6Y-Y09",
+      "error": {
+        "code": "length",
+        "length": 15
+      }
+    },
+    {
+      "input": "04HM-ASW9-NF6Y-Y09F0",
+      "error": {
+        "code": "length",
+        "length": 17
+      }
+    },
+    {
+      "input": "04HM-AUW9-NF6Y-Y09F",
+      "error": {
+        "code": "unknown-char",
+        "index": 5,
+        "char": "U"
+      }
+    },
+    {
+      "input": "é4HM-ASW9-NF6Y-Y09F",
+      "error": {
+        "code": "unknown-char",
+        "index": 0,
+        "char": "é"
+      }
+    },
+    {
+      "input": "04HM-ASW9-NF6Y-Y09*",
+      "error": {
+        "code": "unknown-char",
+        "index": 15,
+        "char": "*"
+      }
+    },
+    {
+      "input": "40HM-ASW9-NF6Y-Y09F",
+      "error": {
+        "code": "checksum"
+      }
+    },
+    {
+      "input": "049M-ASW9-NF6Y-Y0HF",
+      "error": {
+        "code": "checksum"
+      }
+    },
+    {
+      "input": "04HM-ASW9-NF6Y-Y09Z",
+      "error": {
+        "code": "checksum"
+      }
+    }
+  ],
+  "keys": [
+    {
+      "secret": "00000000000000000000",
+      "salt": "000102030405060708090a0b0c0d0e0f",
+      "kdf": {
+        "m": 32768,
+        "t": 2,
+        "p": 1
+      },
+      "argon2id": "209b542f834d3eda8b2bb5b96edfd7b945f3a26d086a7a55d172018c0c3be7d1",
+      "backup_key": "a11cc2cbd6587b2c6657b7255e700de18056c32e4211ab0a6bbd4b92e08f7710"
+    },
+    {
+      "secret": "0123456789abcdef0120",
+      "salt": "f0e1d2c3b4a5968778695a4b3c2d1e0f",
+      "kdf": {
+        "m": 19456,
+        "t": 2,
+        "p": 1
+      },
+      "argon2id": "762034fd12a3437ac96dfa262bc63444814314aced67f40bbd5f1d3e995fd740",
+      "backup_key": "080e40a47f1760099e72933ca3e2179b23f62b7700255dfe86ccafb588832b80"
+    },
+    {
+      "secret": "73dcb88fcac796fd3f00",
+      "salt": "26a37741b17eeb712abfae94cb0bd631",
+      "kdf": {
+        "m": 24576,
+        "t": 3,
+        "p": 2
+      },
+      "argon2id": "dbb055f4fa415b04227ba5a7edf65d7412d8c2f96ea9afb722bec0546895d1e6",
+      "backup_key": "35ad5456b6c05ed24c34e7cc1a90ed5fcddb9fcfe3f480045508a528f7a49907"
+    }
+  ],
+  "backups": [
+    {
+      "code": "04HM-ASW9-NF6Y-Y09F",
+      "aad": "demo-backup|3|2026-11-14T12:00:00.000Z|code16|argon2id m=32768 t=2 p=1|47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+      "file": {
+        "format": "demo-backup",
+        "version": 3,
+        "createdAt": "2026-11-14T12:00:00.000Z",
+        "secret": "code16",
+        "kdf": {
+          "name": "argon2id",
+          "m": 32768,
+          "t": 2,
+          "p": 1
+        },
+        "salt": "UqzdWnpGkRKWglG0t5Nl4g==",
+        "nonce": "34gJSCVrjmTABvqf",
+        "ciphertext": "6fS6MvFsmCUHtH5MZRfsPIul8o9jyN7c45Z9Gn7m5oyMyOUz56/EB+8yR6l/dBsExp5GJxj/dmRrRYfYqjdqgoaLYAF2LxWgk9VRHsm1"
+      },
+      "payload": {
+        "portfolio": [
+          {
+            "pupil": "Bodka",
+            "note": "kód zálohy 0.15.0"
+          }
+        ]
+      }
+    }
+  ],
+  "chunks": [
+    {
+      "code": "EFEB-H3YA-RYBF-TFR2",
+      "content": "príloha portfólia",
+      "name": "d0a2cc5cbfb1d90c9be87fd16da5fe95ad624416a6c7762e11e4f10e0b641087",
+      "blob": "52474231d8d40b78487fd036da99901d7cd50ea948ed087143f1608a9109ceb70d458e4591fb7ab31c04128bec2e4c7a3f81e6",
+      "backup": {
+        "file": {
+          "format": "demo-backup",
+          "version": 3,
+          "createdAt": "2026-11-14T12:30:00.000Z",
+          "secret": "code16",
+          "kdf": {
+            "name": "argon2id",
+            "m": 19456,
+            "t": 2,
+            "p": 1
+          },
+          "salt": "qgOab35P9UKBBD2I572MVg==",
+          "nonce": "2vnuS6O+zhzLFOYx",
+          "ciphertext": "vgQCVuvA7odoUc6hFE8bugenZeC8kwynVvRtQHazaftOygm5E37dAIlshrausb2ux1OIoOyishEP5IYi0lA2x/PBJZ6ETVCboytHgWbVLuW8xPY/JOE1TE2lEDDvsWre6khjZsg6rV373zxFv2OA/KOBPJsO6Vlfwultary61P5fEV78tqSTUA2yEmo+W4hg3OKUYWYW0PykWVSMeg==",
+          "chunks": [
+            "d0a2cc5cbfb1d90c9be87fd16da5fe95ad624416a6c7762e11e4f10e0b641087"
+          ]
+        },
+        "payload": {
+          "files": [
+            {
+              "name": "práca.txt",
+              "mime": "text/plain",
+              "size": 18,
+              "chunks": [
+                "d0a2cc5cbfb1d90c9be87fd16da5fe95ad624416a6c7762e11e4f10e0b641087"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "rfc9106_argon2id": {
+    "source": "RFC 9106 section 5.3",
+    "password": "0101010101010101010101010101010101010101010101010101010101010101",
+    "salt": "02020202020202020202020202020202",
+    "secret": "0303030303030303",
+    "ad": "040404040404040404040404",
+    "m": 32,
+    "t": 3,
+    "p": 4,
+    "tag": "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659"
+  }
+}
