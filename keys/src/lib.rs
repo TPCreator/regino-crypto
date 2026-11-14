@@ -1,6 +1,7 @@
 //! Keys for apps built on the regino-crypto core.
 //!
 //! - [`kdf`] – key from a password via Argon2id (parameters are stored with the data and can be raised).
+//! - [`backup_code`] – 16-character backup code (Crockford Base32 + check character), keys through Argon2id.
 //! - [`backup_chunks`] – large files in backups: content-addressed chunks (HMAC name, AES-256-GCM), shared by all backups.
 //! - [`chunks`] – large files sealed in chunks (index and final-chunk flag authenticated) and a keyed fingerprint.
 //! - [`wrap`] – wrapping a key with another key and sealing data (XChaCha20-Poly1305, version in the header).
@@ -18,6 +19,7 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 pub mod backup_chunks;
+pub mod backup_code;
 pub mod chunks;
 pub mod device;
 pub mod group;

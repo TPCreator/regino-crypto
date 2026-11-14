@@ -70,13 +70,14 @@ describe('encrypted backup', () => {
       error: 'not-backup',
     });
     const file = await encryptBackup(secret, data, undefined, APP);
-    expect(await decryptBackup(secret, { ...file, version: 3 }, APP)).toEqual({
+    // 0.15.0: version 3 (backup code) is known now, so the first newer version is 4
+    expect(await decryptBackup(secret, { ...file, version: 4 }, APP)).toEqual({
       ok: false,
       error: 'newer-version',
     });
-    // 0.12.1: only the versions this code writes or wrote (1, 2) are read; a value that is not a
-    // known version and not an integer above the highest one is not a backup at all
-    expect(BACKUP_VERSIONS).toEqual([1, 2]);
+    // 0.12.1: only the versions this code writes or wrote (1, 2 and since 0.15.0 3) are read; a value that
+    // is not a known version and not an integer above the highest one is not a backup at all
+    expect(BACKUP_VERSIONS).toEqual([1, 2, 3]);
     expect(BACKUP_VERSION).toBe(Math.max(...BACKUP_VERSIONS));
     for (const version of ['x', '1', 0, -1, 1.5, NaN, Infinity, null, undefined, true, [1]])
       expect(await decryptBackup(secret, { ...file, version }, APP), String(version)).toEqual({

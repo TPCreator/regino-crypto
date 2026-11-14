@@ -7,3 +7,8 @@ resolver = "2"
 opt-level = 2
 [profile.dev.package.openssl-sys]
 opt-level = 2
+# Argon2id runs in the tests with 19–32 MiB (backup code vectors) – optimized in debug builds too.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

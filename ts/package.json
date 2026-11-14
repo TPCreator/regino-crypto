@@ -1,6 +1,6 @@
 {
   "name": "@regino/crypto",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "type": "module",
@@ -10,7 +10,8 @@
     "test": "vitest run --coverage",
     "check": "tsc --noEmit",
     "build:tool": "node tools/build.mjs",
-    "bench": "esbuild bench/chain.ts --bundle --platform=node --format=esm --outfile=bench/.out/chain.mjs --log-level=warning && node bench/.out/chain.mjs"
+    "bench": "esbuild bench/chain.ts --bundle --platform=node --format=esm --outfile=bench/.out/chain.mjs --log-level=warning && node bench/.out/chain.mjs",
+    "bench:code": "esbuild bench/backupCode.ts --bundle --platform=node --format=esm --outfile=bench/.out/backupCode.mjs --log-level=warning && node bench/.out/backupCode.mjs"
   },
   "devDependencies": {
     "@cyclonedx/cyclonedx-npm": "6.0.1",
@@ -22,6 +23,7 @@
   },
   "dependencies": {
     "@noble/ed25519": "3.2.0",
+    "@noble/hashes": "2.4.0",
     "qrcode-generator": "^2.0.4"
   }
 }

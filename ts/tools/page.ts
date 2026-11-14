@@ -2,6 +2,7 @@
 import jsQR from 'jsqr';
 import { assembleChunkedFile, type BackupChunkKeys, type ChunkedFile } from '../src/backupChunks';
 import { openBackup } from '../src/openBackup';
+import { BACKUP_CODE_QR_PREFIX, parseBackupCode } from '../src/backupCode';
 import { parseRecoveryQr } from '../src/recovery';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -15,6 +16,7 @@ $('go').addEventListener('click', async () => {
     out.className = 'err';
     return;
   }
+  out.textContent = 'Opening…';
   const r = await openBackup(await file.text(), $<HTMLTextAreaElement>('words').value);
   if (!r.ok) {
     out.textContent = r.message;
@@ -71,7 +73,7 @@ function showFiles(files: ChunkedFile[], keys: BackupChunkKeys) {
   }
 }
 
-// QR code from a photo of the recovery sheet → text "RGR1:…" into the code field (nothing is sent).
+// QR code from a photo of the recovery sheet → text "RGR1:…" (words) or "RGC1:…" (backup code) into the code field (nothing is sent).
 $('qr').addEventListener('change', async () => {
   const img = $<HTMLInputElement>('qr').files?.[0];
   const msg = $('qrmsg');
@@ -87,7 +89,8 @@ $('qr').addEventListener('change', async () => {
     ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
     const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const text = jsQR(data.data, data.width, data.height)?.data ?? '';
-    if (!parseRecoveryQr(text)) {
+    const isCode = text.toUpperCase().startsWith(BACKUP_CODE_QR_PREFIX) && parseBackupCode(text).ok;
+    if (!parseRecoveryQr(text) && !isCode) {
       msg.textContent = 'No recovery-sheet QR code was found in the photo. Try a sharper photo or enter the words.';
       return;
     }
