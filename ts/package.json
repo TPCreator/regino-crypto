@@ -14,8 +14,8 @@
     "bench:code": "esbuild bench/backupCode.ts --bundle --platform=node --format=esm --outfile=bench/.out/backupCode.mjs --log-level=warning && node bench/.out/backupCode.mjs"
   },
   "devDependencies": {
-    "@cyclonedx/cyclonedx-npm": "6.0.1",
-    "@vitest/coverage-v8": "^5.0.4",
+    "@cyclonedx/cyclonedx-npm": "7.0.0",
+    "@vitest/coverage-v8": "^5.1.0",
     "esbuild": "^0.28.2",
     "jsqr": "^1.4.0",
     "typescript": "^7.0.2",
