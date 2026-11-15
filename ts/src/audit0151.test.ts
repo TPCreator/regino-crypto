@@ -64,7 +64,7 @@ describe('N3: the chunk list of a backup only in its canonical form (sorted, no 
     expect(await decryptBackup(s, b, 'demo')).toMatchObject({ ok: true, chunks: names });
     for (const chunks of [[...names].reverse(), [...names, names[0]], [names[0], names[0], names[1]]])
       expect(await decryptBackup(s, { ...b, chunks }, 'demo'), JSON.stringify(chunks)).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
-  });
+   }, 60_000);
 });
 
 describe('N6: runtime dependencies pinned exactly', () => {
@@ -91,7 +91,7 @@ describe('N7: a lower Argon2id bound for reading on a phone', () => {
     }
     expect(MOBILE_BACKUP_CODE_KDF).toEqual({ m: 65536, t: 8, p: 4, work: 131072 });
     expect(validBackupCodeKdf(DEFAULT_BACKUP_CODE_KDF, MOBILE_BACKUP_CODE_KDF) && !validBackupCodeKdf({ m: 65536, t: 4, p: 1 }, MOBILE_BACKUP_CODE_KDF)).toBe(true);
-  });
+   }, 60_000); // two Argon2id of 32 MiB
 });
 
 /** The scenario of the audit: anchor signs v1 (alice and bob admins); alice removes bob in v2 (epoch 2);
