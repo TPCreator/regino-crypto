@@ -1,8 +1,8 @@
 //! Audit S1/S2 (0.15.1): the shared vectors `testvectors/regino/signing-0.15.1.json` were made by the
 //! TypeScript side; Rust must give the same blobs, confirmation and wrap signatures and the same verdicts
-//! for `require_anchor_on_latest` (a chain continued by a removed admin).
+//! for `require_anchor_on_latest` (a chain continued by a removed admin) and `require_current_epoch`.
 
-use regino_keys::sign::{self, AcceptedManifest, ChainOptions, ManifestConfirmation, PublicKey, SigningKey};
+use regino_keys::sign::{self, AcceptedManifest, ChainOptions, ManifestConfirmation, PublicKey, SigningKey, WrapOptions, WrapStatement};
 use regino_keys::{Error, Key};
 use serde_json::Value;
 
@@ -93,3 +93,35 @@ fn require_anchor_on_latest() {
     assert_eq!(sign::verify_manifest_chain_from_anchor_with(&blobs, v["scope"].as_str().unwrap(), &[public(&v, "anchor")], &opts).unwrap_err(), Error::UntrustedSigner);
 }
 
+#[test]
+fn require_current_epoch() {
+    let v = v();
+    let v2 = list(&v, "v2");
+    let alice = key(&v, "alice");
+    for w in v["wraps"].as_array().unwrap() {
+        let (recipient, wrapped, sig) = (hex(&w["recipient"]), hex(&w["wrapped"]), hex(&w["signature"]));
+        let st = WrapStatement {
+            context: w["context"].as_str().unwrap(),
+            object_id: w["object_id"].as_str().unwrap(),
+            version: w["version"].as_u64().unwrap(),
+            manifest: hex(&w["manifest"]).try_into().unwrap(),
+            recipient: &recipient,
+            wrapped: &wrapped,
+        };
+        assert_eq!(sign::sign_wrap(&alice, &st).unwrap().to_vec(), sig);
+        assert_eq!(sign::sign_prepared(&alice, &hex(&w["message"]), Some("dovernik|")).unwrap().to_vec(), sig);
+        let verdict = |r: Result<(), Error>| match r {
+            Ok(()) => "ok",
+            Err(Error::BadChain) => "chain",
+            Err(e) => panic!("{e:?}"),
+        };
+        assert_eq!(verdict(sign::verify_wrap_for(&v2, &[], &alice.public_key(), &st, &sig)), w["default"], "{}", w["version"]);
+        let strict = WrapOptions { require_current_epoch: true, ..WrapOptions::default() };
+        assert_eq!(verdict(sign::verify_wrap_for_with(&v2, &[], &alice.public_key(), &st, &sig, &strict)), w["require_current_epoch"], "{}", w["version"]);
+        // with a recipient id: alice's seal is the fixed recipient of the vectors
+        let both = WrapOptions { recipient_id: Some("alice"), require_current_epoch: true };
+        assert_eq!(verdict(sign::verify_wrap_for_with(&v2, &[], &alice.public_key(), &st, &sig, &both)), w["require_current_epoch"]);
+        let other = WrapOptions { recipient_id: Some("bob"), ..WrapOptions::default() };
+        assert_eq!(sign::verify_wrap_for_with(&v2, &[], &alice.public_key(), &st, &sig, &other), Err(Error::BadChain));
+    }
+}

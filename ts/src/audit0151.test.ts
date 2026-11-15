@@ -11,7 +11,9 @@ import {
   manifestConfirmationMessage,
   nextManifest,
   openManifest,
+  openSignedWrap,
   SIGNATURE_LEN,
+  signedWrapForDevice,
   signingPublicKey,
   signManifest,
   verifyManifest,
@@ -19,6 +21,7 @@ import {
   verifyManifestConfirmation,
   type Member,
 } from './signing';
+import { newDeviceKeys, newGroupKey, publicKeyBytes } from './sync';
 
 const seed = (n: number) => new Uint8Array(32).fill(n);
 const member = async (id: string, admin: boolean, n: number): Promise<Member> => ({ id, role: 'member', admin, sign: await signingPublicKey(seed(n)), seal: new Uint8Array(65).fill(4), sealVersion: 1 });
@@ -141,3 +144,17 @@ describe('S1: the latest version signed or confirmed by an anchor (requireAnchor
   });
 });
 
+describe('S2: only the key of the list\'s own epoch (requireCurrentEpoch)', () => {
+  it('refuses a genuine key of an earlier epoch served as the current one', async () => {
+    const { keys, v2 } = await forkScenario();
+    const dev = await newDeviceKeys();
+    const devPub = await publicKeyBytes(dev.publicKey);
+    const ctx = 'demo|case|1|key';
+    const old = await signedWrapForDevice(newGroupKey(), devPub, ctx, 'case1', v2, keys.alice, 1);
+    const cur = await signedWrapForDevice(newGroupKey(), devPub, ctx, 'case1', v2, keys.alice);
+    // default (0.15.0): the older epoch is accepted – a server can roll the current key back to it
+    expect((await openSignedWrap(old, dev.privateKey, devPub, ctx, 'case1', v2)).epoch).toBe(1);
+    await expect(openSignedWrap(old, dev.privateKey, devPub, ctx, 'case1', v2, [], { requireCurrentEpoch: true })).rejects.toThrow('another object, epoch or member list');
+    expect((await openSignedWrap(cur, dev.privateKey, devPub, ctx, 'case1', v2, [], { requireCurrentEpoch: true })).epoch).toBe(2);
+  });
+});

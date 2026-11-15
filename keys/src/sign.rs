@@ -249,6 +249,38 @@ pub fn verify_wrap_for(
     verify_wrap(signer, st, signature)
 }
 
+/// Options of [`verify_wrap_for_with`] (since 0.15.1). `WrapOptions::default()` = [`verify_wrap_for`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WrapOptions<'a> {
+    /// As [`verify_wrap_for_recipient`]: the key must be wrapped for this member's `seal`.
+    pub recipient_id: Option<&'a str>,
+    /// The key must be of the list's own epoch (`version` = `epoch` of the list), not of an earlier one – for
+    /// the key an app seals new items with. A genuine key of an earlier epoch, signed by an admin of the same
+    /// list (to give a new member older keys), is refused (`Error::BadChain`), so a server cannot hand it out
+    /// as the current one (rollback to a key a removed member still knows).
+    pub require_current_epoch: bool,
+}
+
+/// [`verify_wrap_for`] with options (since 0.15.1, the same as `openSignedWrap(…, opts)` in TypeScript).
+pub fn verify_wrap_for_with(
+    list: &AcceptedManifest,
+    anchors: &[PublicKey],
+    signer: &PublicKey,
+    st: &WrapStatement,
+    signature: &[u8],
+    opts: &WrapOptions,
+) -> Result<(), Error> {
+    if let Some(id) = opts.recipient_id {
+        if !list.manifest.members.iter().any(|m| m.id == id && !m.seal.is_empty() && m.seal == st.recipient) {
+            return Err(Error::BadChain);
+        }
+    }
+    if opts.require_current_epoch && st.version != list.manifest.epoch {
+        return Err(Error::BadChain);
+    }
+    verify_wrap_for(list, anchors, signer, st, signature)
+}
+
 /// [`verify_wrap_for`] and also that the key was wrapped for the member `recipient_id` of that list: the
 /// member must be in the list and its `seal` must be the recipient key of the statement (`Error::BadChain`
 /// otherwise) – so a key wrapped for someone else's key, or for a key the list does not name, is refused.
@@ -260,10 +292,7 @@ pub fn verify_wrap_for_recipient(
     signature: &[u8],
     recipient_id: &str,
 ) -> Result<(), Error> {
-    if !list.manifest.members.iter().any(|m| m.id == recipient_id && !m.seal.is_empty() && m.seal == st.recipient) {
-        return Err(Error::BadChain);
-    }
-    verify_wrap_for(list, anchors, signer, st, signature)
+    verify_wrap_for_with(list, anchors, signer, st, signature, &WrapOptions { recipient_id: Some(recipient_id), ..WrapOptions::default() })
 }
 
 /// A member vouches for its own sealing key: scope, its member id, a version that only goes up, the key.

@@ -310,12 +310,26 @@ export async function signedWrapForDevice(
   return { v: SIGNED_WRAP_VERSION, id: objectId, ver: epoch, m: b64(list.hash), w, k: b64(who.publicKey), s: b64(s) };
 }
 
+/** Options of `openSignedWrap`. */
+export interface OpenWrapOptions {
+  /** since 0.13.1: the key must be for this member of the list, wrapped for the seal the list names */
+  recipientId?: string;
+  /**
+   * since 0.15.1: the key must be of the list's own epoch (`ver` = `epoch` of the list), not of an earlier
+   * one – for the key an app seals new items with. A genuine key of an earlier epoch, signed by an admin
+   * of the same list (to give a new member older keys), is refused, so a server cannot hand it out as the
+   * current one (rollback to a key a removed member still knows). Off by default (0.15.0 behaviour).
+   */
+  requireCurrentEpoch?: boolean;
+}
+
 /**
  * Checks, then unwraps: the key must be for `objectId`, for the list the recipient accepted itself as
  * the latest (`list` – its hash), for an epoch not above the list's (earlier epochs are allowed: a new
  * member gets older keys too), signed by an **admin** of that list, by the **signer of that list** (a
  * coordinator handing over in this version) or by one of `anchors` (e.g. the centre's management), with
- * a valid signature. Returns the key, the signer and the epoch; throws otherwise.
+ * a valid signature. Returns the key, the signer and the epoch; throws otherwise. With
+ * `requireCurrentEpoch` only a key of the list's epoch is accepted (`OpenWrapOptions`).
  */
 export async function openSignedWrap(
   signed: SignedWrappedKey,
@@ -325,7 +339,7 @@ export async function openSignedWrap(
   objectId: string,
   list: AcceptedManifest,
   anchors: readonly Uint8Array[] = [],
-  opts: { recipientId?: string } = {},
+  opts: OpenWrapOptions = {},
 ): Promise<{ groupKey: Uint8Array; signer: Uint8Array; epoch: number }> {
   if (!signed || signed.v !== SIGNED_WRAP_VERSION) throw new Error("Unsupported signed wrapped key version.");
   // since 0.13.1: the key must be for the member `recipientId` of the list, wrapped for the seal the list names
@@ -341,7 +355,8 @@ export async function openSignedWrap(
   } catch {
     throw new Error("Invalid signed wrapped key.");
   }
-  if (signed.id !== objectId || !(signed.ver <= list.manifest.epoch) || !equalBytes(manifest, list.hash))
+  const epochOk = opts.requireCurrentEpoch === true ? signed.ver === list.manifest.epoch : signed.ver <= list.manifest.epoch;
+  if (signed.id !== objectId || !epochOk || !equalBytes(manifest, list.hash))
     throw new Error("The signed key is for another object, epoch or member list.");
   if (!anchors.some((k) => equalBytes(k, signer)) && !equalBytes(signer, list.signer) && !memberByKey(list.manifest, signer)?.admin)
     throw new Error("The sender of the key is not trusted.");
