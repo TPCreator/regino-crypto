@@ -45,15 +45,24 @@ export const MIN_BACKUP_CODE_KDF: Readonly<BackupCodeKdf> = Object.freeze({ m: 1
  */
 export const MAX_BACKUP_CODE_KDF: Readonly<BackupCodeKdf & { work: number }> = Object.freeze({ m: 131072, t: 8, p: 4, work: 262144 });
 
-export function validBackupCodeKdf(k: unknown): k is BackupCodeKdf {
+/**
+ * A lower upper bound for reading on a phone (since 0.15.1, `decryptBackup(…, { maxKdf })`): 64 MiB and
+ * `m·t` ≤ 128 MiB – at most 2× the work of the default (measured: the default takes about 0.4 s in Node and
+ * 1–1.5 s on a phone, the full `MAX_BACKUP_CODE_KDF` 4× as long with 128 MiB of memory). Backups with the
+ * default parameters (every backup the core writes unless an app raises them) open with it.
+ */
+export const MOBILE_BACKUP_CODE_KDF: Readonly<BackupCodeKdf & { work: number }> = Object.freeze({ m: 65536, t: 8, p: 4, work: 131072 });
+
+/** Parameters within the bounds (`max` defaults to `MAX_BACKUP_CODE_KDF`; a lower `max` only narrows them). */
+export function validBackupCodeKdf(k: unknown, max: Readonly<BackupCodeKdf & { work: number }> = MAX_BACKUP_CODE_KDF): k is BackupCodeKdf {
   if (!k || typeof k !== 'object') return false;
   const { m, t, p } = k as Record<string, unknown>;
   const int = (v: unknown, lo: number, hi: number): v is number => Number.isInteger(v) && (v as number) >= lo && (v as number) <= hi;
   return (
-    int(m, MIN_BACKUP_CODE_KDF.m, MAX_BACKUP_CODE_KDF.m) &&
-    int(t, MIN_BACKUP_CODE_KDF.t, MAX_BACKUP_CODE_KDF.t) &&
-    int(p, MIN_BACKUP_CODE_KDF.p, MAX_BACKUP_CODE_KDF.p) &&
-    m * t <= MAX_BACKUP_CODE_KDF.work &&
+    int(m, MIN_BACKUP_CODE_KDF.m, Math.min(max.m, MAX_BACKUP_CODE_KDF.m)) &&
+    int(t, MIN_BACKUP_CODE_KDF.t, Math.min(max.t, MAX_BACKUP_CODE_KDF.t)) &&
+    int(p, MIN_BACKUP_CODE_KDF.p, Math.min(max.p, MAX_BACKUP_CODE_KDF.p)) &&
+    m * t <= Math.min(max.work, MAX_BACKUP_CODE_KDF.work) &&
     // Argon2 needs at least 8 KiB per lane – always true above the minimum, kept for clarity
     m >= 8 * p
   );

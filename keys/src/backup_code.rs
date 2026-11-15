@@ -42,6 +42,22 @@ pub fn valid_params(p: KdfParams) -> bool {
     p.is_valid()
 }
 
+/// A lower upper bound for reading on a phone (since 0.15.1, the same as `MOBILE_BACKUP_CODE_KDF` in
+/// TypeScript): 64 MiB, 8 passes, 4 lanes, `memory × passes` ≤ 128 MiB – at most 2× the work of
+/// [`DEFAULT_PARAMS`], which it accepts.
+pub const MOBILE_MAX_PARAMS: KdfParams = KdfParams { memory_kib: 65536, iterations: 8, parallelism: 4 };
+pub const MOBILE_MAX_WORK_KIB: u64 = 131072;
+
+/// [`valid_params`] and within [`MOBILE_MAX_PARAMS`] / [`MOBILE_MAX_WORK_KIB`] – check a header with it
+/// before [`backup_key`] on a phone.
+pub fn valid_params_mobile(p: KdfParams) -> bool {
+    p.is_valid()
+        && p.memory_kib <= MOBILE_MAX_PARAMS.memory_kib
+        && p.iterations <= MOBILE_MAX_PARAMS.iterations
+        && p.parallelism <= MOBILE_MAX_PARAMS.parallelism
+        && u64::from(p.memory_kib) * u64::from(p.iterations) <= MOBILE_MAX_WORK_KIB
+}
+
 /// Why an input is not a backup code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodeError {

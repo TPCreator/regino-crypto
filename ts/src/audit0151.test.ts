@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import lock from '../package-lock.json';
 import pkg from '../package.json';
 import { decryptBackup, encryptBackup } from './backup';
-import { newBackupCodeSecret } from './backupCode';
+import { DEFAULT_BACKUP_CODE_KDF, MOBILE_BACKUP_CODE_KDF, newBackupCodeSecret, validBackupCodeKdf } from './backupCode';
 import { newRecoverySecret } from './recovery';
 import { openManifest, SIGNATURE_LEN, signingPublicKey, signManifest, verifyManifest, type Member } from './signing';
 
@@ -60,5 +60,21 @@ describe('N6: runtime dependencies pinned exactly', () => {
       expect(locked.packages['']?.dependencies?.[name], name).toBe(range);
       expect(locked.packages[`node_modules/${name}`]?.version, name).toBe(range);
     }
+  });
+});
+
+describe('N7: a lower Argon2id bound for reading on a phone', () => {
+  it('maxKdf refuses a costlier header before any work; default backups open', async () => {
+    const s = newBackupCodeSecret();
+    const b = await encryptBackup(s, { x: 1 }, '2026-11-15T00:00:00Z', 'demo');
+    const opts = { maxKdf: MOBILE_BACKUP_CODE_KDF };
+    expect(await decryptBackup(s, b, 'demo', opts)).toMatchObject({ ok: true });
+    for (const kdf of [{ m: 131072, t: 2, p: 1 }, { m: 65536, t: 4, p: 1 }, { m: 32768, t: 8, p: 1 }]) {
+      const t = performance.now();
+      expect(await decryptBackup(s, { ...b, kdf: { name: 'argon2id', ...kdf } }, 'demo', opts), JSON.stringify(kdf)).toEqual({ ok: false, error: 'not-backup' });
+      expect(performance.now() - t).toBeLessThan(100);
+    }
+    expect(MOBILE_BACKUP_CODE_KDF).toEqual({ m: 65536, t: 8, p: 4, work: 131072 });
+    expect(validBackupCodeKdf(DEFAULT_BACKUP_CODE_KDF, MOBILE_BACKUP_CODE_KDF) && !validBackupCodeKdf({ m: 65536, t: 4, p: 1 }, MOBILE_BACKUP_CODE_KDF)).toBe(true);
   });
 });

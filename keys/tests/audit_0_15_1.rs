@@ -54,3 +54,20 @@ fn n5_key_in_one_place_and_zeroize_features() {
         assert!(line.contains("\"zeroize\""), "{line}");
     }
 }
+
+/// N7: the lower bound for reading on a phone (the same numbers as `MOBILE_BACKUP_CODE_KDF` in TypeScript).
+#[test]
+fn n7_mobile_bound() {
+    use regino_keys::backup_code::{valid_params, valid_params_mobile, DEFAULT_PARAMS, MOBILE_MAX_PARAMS, MOBILE_MAX_WORK_KIB};
+    use regino_keys::kdf::KdfParams;
+    assert_eq!((MOBILE_MAX_PARAMS.memory_kib, MOBILE_MAX_PARAMS.iterations, MOBILE_MAX_PARAMS.parallelism, MOBILE_MAX_WORK_KIB), (65536, 8, 4, 131072));
+    assert!(valid_params_mobile(DEFAULT_PARAMS) && valid_params_mobile(KdfParams::MIN));
+    for p in [
+        KdfParams { memory_kib: 131072, iterations: 2, parallelism: 1 },
+        KdfParams { memory_kib: 65536, iterations: 4, parallelism: 1 },
+        KdfParams { memory_kib: 32768, iterations: 8, parallelism: 1 },
+    ] {
+        assert!(valid_params(p) && !valid_params_mobile(p), "{p:?}");
+    }
+    assert!(!valid_params_mobile(KdfParams { memory_kib: 1 << 30, iterations: 1, parallelism: 1 }));
+}
