@@ -192,7 +192,9 @@ export async function decryptBackup<T = unknown>(
   try {
     const salt = unb64(f.salt);
     if (salt.length !== 16) throw new Error('The salt must have 16 bytes.');
-    const chunksOk = Array.isArray(f.chunks) && f.chunks.every((c) => typeof c === 'string');
+    // canonical only (since 0.15.1): sorted, no duplicates – the form encryptBackup writes; the AAD binds the
+    // sorted unique list, so a reordered or doubled list would open and be handed to the app as it is
+    const chunksOk = Array.isArray(f.chunks) && f.chunks.every((c, i, a) => typeof c === 'string' && (i === 0 || (a[i - 1] as string) < c));
     if (version === 2 && !chunksOk) throw new Error('Missing chunk list.');
     if (version === 3 && f.chunks !== undefined && !(chunksOk && (f.chunks as string[]).length)) throw new Error('Invalid chunk list.');
     const key = kdf ? await codeBackupKey(secret, salt, kdf, app) : await backupKey(secret, salt, app);

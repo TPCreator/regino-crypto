@@ -1,6 +1,9 @@
 // Fixes after the audit of 0.15.0 (2026-11-15): each test failed before its fix (AUDIT.md § 4.5).
 import { signAsync } from '@noble/ed25519';
 import { describe, expect, it } from 'vitest';
+import { decryptBackup, encryptBackup } from './backup';
+import { newBackupCodeSecret } from './backupCode';
+import { newRecoverySecret } from './recovery';
 import { openManifest, SIGNATURE_LEN, signingPublicKey, signManifest, verifyManifest, type Member } from './signing';
 
 const seed = (n: number) => new Uint8Array(32).fill(n);
@@ -29,5 +32,20 @@ describe('N2: signature of a member list before the keys of its members', () => 
     const signed = new Uint8Array([...msg, ...(await signAsync(msg, seed(1)))]);
     await expect(openManifest(signed)).rejects.toThrow('Not a valid member list.');
     await expect(openManifest(blob)).resolves.toBeTruthy();
+  });
+});
+
+describe('N3: the chunk list of a backup only in its canonical form (sorted, no duplicates)', () => {
+  const names = ['aa'.repeat(32), 'bb'.repeat(32)];
+  it.each([
+    ['words (version 2)', () => newRecoverySecret(12)],
+    ['backup code (version 3)', newBackupCodeSecret],
+  ])('%s: a reordered or doubled list is refused, the written one opens', async (_, secret) => {
+    const s = secret();
+    const b = await encryptBackup(s, { x: 1 }, '2026-11-15T00:00:00Z', 'demo', [names[1]!, names[0]!, names[0]!]);
+    expect(b.chunks).toEqual(names);
+    expect(await decryptBackup(s, b, 'demo')).toMatchObject({ ok: true, chunks: names });
+    for (const chunks of [[...names].reverse(), [...names, names[0]], [names[0], names[0], names[1]]])
+      expect(await decryptBackup(s, { ...b, chunks }, 'demo'), JSON.stringify(chunks)).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
   });
 });
