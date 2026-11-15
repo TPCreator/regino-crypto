@@ -508,13 +508,29 @@ pub fn open_manifest(blob: &[u8]) -> Result<AcceptedManifest, Error> {
         return Err(Error::Format);
     }
     let (msg, sig) = blob.split_at(blob.len() - SIGNATURE_LEN);
-    let (manifest, signer) = decode_manifest(msg)?;
+    // since 0.15.1: the signature first, the members' public keys (up to MAX_MEMBERS point decodings) after it
+    let (manifest, signer) = decode_manifest_unchecked(msg)?;
     signer.verify_message(msg, sig)?;
+    check_member_keys(&manifest)?;
     Ok(AcceptedManifest { manifest, signer, hash: Sha256::digest(blob).into(), blob: blob.to_vec() })
 }
 
-/// The list and its signer from a `manifest` message (without the signature); canonical only.
+/// The list and its signer from a `manifest` message (without the signature); canonical only, every
+/// public key checked.
 fn decode_manifest(msg: &[u8]) -> Result<(Manifest, PublicKey), Error> {
+    let (manifest, signer) = decode_manifest_unchecked(msg)?;
+    check_member_keys(&manifest)?;
+    Ok((manifest, signer))
+}
+
+/// Members' signing keys are valid points (the same check as [`PublicKey::from_bytes`]).
+fn check_member_keys(m: &Manifest) -> Result<(), Error> {
+    m.members.iter().try_for_each(|x| PublicKey::from_bytes(x.sign.as_bytes()).map(|_| ()))
+}
+
+/// [`decode_manifest`] with the signer's key checked, but the members' keys **not yet** – they are taken
+/// as bytes; the caller checks them ([`check_member_keys`]) before the list is used.
+fn decode_manifest_unchecked(msg: &[u8]) -> Result<(Manifest, PublicKey), Error> {
     if msg.get(..MAGIC.len()) != Some(&MAGIC[..]) {
         return Err(Error::Format);
     }
@@ -540,7 +556,7 @@ fn decode_manifest(msg: &[u8]) -> Result<(Manifest, PublicKey), Error> {
             [1] => true,
             _ => return Err(Error::Format),
         };
-        let sign = PublicKey::from_bytes(r.field()?)?;
+        let sign = PublicKey(r.fixed()?);
         let seal_version = u64::from_be_bytes(r.fixed()?);
         members.push(Member { id, role, admin, sign, seal: r.field()?.to_vec(), seal_version });
     }

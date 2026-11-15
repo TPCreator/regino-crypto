@@ -407,13 +407,19 @@ const ZERO32 = new Uint8Array(32);
 
 /** The bytes that sign a list (`signer` = the signer's public key) – for a `Signer` outside TypeScript. */
 export function manifestMessage(m: Manifest, signer: Uint8Array): Uint8Array {
+  return encodeManifest(m, signer, true);
+}
+
+/** `checkKeys = false` (only `openManifest`, before the signature): members' keys are checked by the caller. */
+function encodeManifest(m: Manifest, signer: Uint8Array, checkKeys: boolean): Uint8Array {
   if (!m || !Array.isArray(m.members) || m.members.length > MAX_MEMBERS) throw new Error("Invalid manifest.");
   const prev = bytes(m.prev, 32, 32, "previous hash");
   if (m.version === 0 || (m.version === 1) !== equalBytes(prev, ZERO32)) throw new Error("Invalid manifest version or previous hash.");
   const members = m.members.map((x) => ({ x, id: text(x.id, MAX_NAME, "member id") }));
   members.sort((a, b) => compareBytes(a.id, b.id));
   if (members.some((e, i) => i > 0 && equalBytes(e.id, members[i - 1]!.id))) throw new Error("Duplicate member id.");
-  members.forEach((e) => checkPublic(e.x.sign, "member signing"));
+  // openManifest reads each key as 32 bytes and checks the points after the signature
+  if (checkKeys) members.forEach((e) => checkPublic(e.x.sign, "member signing"));
   const keys = new Set(members.map((e) => b64(e.x.sign)));
   if (keys.size !== members.length) throw new Error("Duplicate member signing key.");
   const fields = [text(m.scope, MAX_CONTEXT, "scope"), u64(m.version), u64(m.epoch), prev, signer, u32(members.length)];
@@ -537,12 +543,14 @@ export async function openManifest(blob: Uint8Array): Promise<AcceptedManifest> 
     if (!r.done) throw new Error();
     manifest = { scope, version, epoch, prev, members };
     checkPublic(signer);
-    // canonical: encoding the decoded list again must give the same bytes (sorted ids, limits)
-    if (!equalBytes(manifestMessage(manifest, signer), msg)) throw new Error();
+    // canonical: encoding the decoded list again must give the same bytes (sorted ids, limits); the
+    // members' keys (up to MAX_MEMBERS point decodings) only after the signature (since 0.15.1)
+    if (!equalBytes(encodeManifest(manifest, signer, false), msg)) throw new Error();
   } catch {
     throw new Error("Not a valid member list.");
   }
   if (!(await verifyEd25519(signer, msg, blob.subarray(msg.length)))) throw new Error("Invalid signature of the member list.");
+  if (!manifest.members.every((x) => isSigningPublicKey(x.sign))) throw new Error("Not a valid member list.");
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", blob as BufferSource));
   return { manifest, signer, hash, blob: blob.slice() };
 }
