@@ -638,6 +638,42 @@ export interface ChainOptions {
   anchorsMaySign?: boolean;
   /** the pinned versions were accepted before: matching pins meet the anchor requirement, versions up to the pin are checked only for structure */
   pinnedTrusted?: boolean;
+  /**
+   * since 0.15.1: the **latest** version must be signed by an anchor or by one of `signers`, or confirmed
+   * by one of them (`confirmations`, `confirmManifest`) – an admin who was removed in a version the server
+   * withholds cannot continue the chain from an older version for someone who restores. Off by default.
+   */
+  requireAnchorOnLatest?: boolean;
+  /** confirmations of the latest version by anchors or `signers` (only with `requireAnchorOnLatest`) */
+  confirmations?: readonly ManifestConfirmation[];
+}
+
+/** An anchor's (or signer's) confirmation of one version of a list (since 0.15.1, `confirmManifest`). */
+export interface ManifestConfirmation {
+  signer: Uint8Array;
+  signature: Uint8Array;
+}
+
+/** The bytes that confirm a list (`signer` = the confirming public key) – for a `Signer` outside TypeScript. */
+export function manifestConfirmationMessage(list: AcceptedManifest, signer: Uint8Array): Uint8Array {
+  checkPublic(signer);
+  return message("manifest-confirm", [text(list.manifest.scope, MAX_CONTEXT, "scope"), u64(list.manifest.version), bytes(list.hash, 32, 32, "list hash"), signer]);
+}
+
+/**
+ * An anchor or a signer confirms a version of a list it checked itself (e.g. management after a
+ * coordinator changed the team): with `requireAnchorOnLatest`, a chain whose latest version is signed by
+ * someone else is accepted only with such a confirmation of exactly that version (its hash).
+ */
+export async function confirmManifest(signer: Signer | Uint8Array, list: AcceptedManifest): Promise<Uint8Array> {
+  const who = await asSigner(signer);
+  return who.sign(manifestConfirmationMessage(list, who.publicKey));
+}
+
+/** Checks a confirmation made by `confirmManifest` (signature only – not whether the key is trusted). */
+export async function verifyManifestConfirmation(signer: Uint8Array, list: AcceptedManifest, signature: Uint8Array): Promise<boolean> {
+  if (!isSigningPublicKey(signer)) return false;
+  return verifyEd25519(signer, manifestConfirmationMessage(list, signer), signature);
 }
 
 const has = (keys: readonly Uint8Array[], k: Uint8Array) => keys.some((x) => equalBytes(x, k));
@@ -678,7 +714,8 @@ function checkPins(out: readonly AcceptedManifest[], p?: PinnedManifest): void {
  * (fail-closed). With `pinned`, a different hash for a pinned version is a fork and a chain that ends
  * before the pinned version means newer lists are withheld – both throw. With `pinnedTrusted` (the pins
  * were accepted before), matching pins meet the anchor requirement and versions up to the pin are checked
- * only for structure, signatures and links. Returns every accepted version, oldest first.
+ * only for structure, signatures and links. With `requireAnchorOnLatest` (since 0.15.1) the latest version
+ * must also be signed or confirmed by an anchor or one of `signers`. Returns every accepted version, oldest first.
  */
 export async function verifyManifestChainFromAnchor(
   blobs: readonly Uint8Array[],
@@ -698,7 +735,21 @@ export async function verifyManifestChainFromAnchor(
   checkPins(out, opts.pinned);
   const pinMeets = opts.pinned !== undefined && opts.pinnedTrusted === true;
   if (!pinMeets && !out.some((a) => has(anchors, a.signer))) throw new Error("The signer of the member list is not trusted (no version signed by an anchor).");
+  if (opts.requireAnchorOnLatest === true && !(await latestConfirmed(out[out.length - 1]!, [...anchors, ...signers], opts.confirmations ?? [])))
+    throw new Error("The signer of the member list is not trusted (the latest version is not signed or confirmed by an anchor).");
   return out;
+}
+
+/** The latest version is signed by one of `keys`, or one of them confirmed it (one check per key). */
+async function latestConfirmed(latest: AcceptedManifest, keys: readonly Uint8Array[], confirmations: readonly ManifestConfirmation[]): Promise<boolean> {
+  if (has(keys, latest.signer)) return true;
+  const tried = new Set<string>();
+  for (const c of confirmations) {
+    if (!(c?.signer instanceof Uint8Array) || !has(keys, c.signer) || tried.has(b64(c.signer))) continue;
+    tried.add(b64(c.signer));
+    if (await verifyManifestConfirmation(c.signer, latest, c.signature)) return true;
+  }
+  return false;
 }
 
 /** One version read by `inspectManifestChain` – **not trusted**: nobody vouched for the signers yet. */

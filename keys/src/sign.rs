@@ -320,7 +320,7 @@ pub fn verify_member_key(
 }
 
 /// Signs a message prepared elsewhere (e.g. by the TypeScript side: `wrapMessage`, `manifestMessage`,
-/// `memberKeyMessage`, `dataMessage`) – for apps that keep the signing key in Rust. The message must be a
+/// `memberKeyMessage`, `dataMessage`, since 0.15.1 `manifestConfirmationMessage`) – for apps that keep the signing key in Rust. The message must be a
 /// well-formed `RGN-SIG1` message of a known kind with the right number of fields; a `wrap` or `manifest`
 /// must name this key as the signer, and a `manifest` must decode to a valid list; a `data` message must
 /// have a context starting with `data_prefix` when one is given (Dôverník: `dovernik|`) – since 0.13.1 the
@@ -368,6 +368,17 @@ pub fn sign_prepared(key: &SigningKey, message: &[u8], data_prefix: Option<&str>
             version: u64::from_be_bytes((*ver).try_into().map_err(|_| Error::Format)?),
             seal,
         })?,
+        (b"manifest-confirm", [scope, ver, hash, signer]) if allowed(scope) => {
+            if *signer != me.as_bytes() {
+                return Err(Error::Format);
+            }
+            confirm_message(
+                std::str::from_utf8(scope).map_err(|_| Error::Format)?,
+                u64::from_be_bytes((*ver).try_into().map_err(|_| Error::Format)?),
+                &(*hash).try_into().map_err(|_| Error::Format)?,
+                &me,
+            )?
+        }
         (b"manifest", _) => {
             let (manifest, signer) = decode_manifest(message)?;
             if signer != me || !allowed(manifest.scope.as_bytes()) {
@@ -702,12 +713,72 @@ pub struct ChainOptions {
     /// the anchor requirement is met and versions up to the pinned one are checked only for structure,
     /// signatures and links – not against anchors or admins. Versions above the pin follow the trust rules.
     pub pinned_trusted: bool,
+    /// Since 0.15.1: the **latest** version must be signed by an anchor or by one of `signers`, or confirmed
+    /// by one of them ([`confirm_manifest`], `confirmations`) – an admin who was removed in a version the
+    /// server withholds cannot continue the chain from an older version for someone who restores
+    /// (`Error::UntrustedSigner`). `false` by default (0.15.0 behaviour).
+    pub require_anchor_on_latest: bool,
+    /// Confirmations of the latest version by anchors or `signers` (only with `require_anchor_on_latest`).
+    pub confirmations: Vec<ManifestConfirmation>,
 }
 
 impl Default for ChainOptions {
     fn default() -> Self {
-        ChainOptions { pinned: None, signers: Vec::new(), anchors_may_sign: true, pinned_trusted: false }
+        ChainOptions {
+            pinned: None,
+            signers: Vec::new(),
+            anchors_may_sign: true,
+            pinned_trusted: false,
+            require_anchor_on_latest: false,
+            confirmations: Vec::new(),
+        }
     }
+}
+
+/// An anchor's (or signer's) confirmation of one version of a list (since 0.15.1, [`confirm_manifest`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifestConfirmation {
+    pub signer: PublicKey,
+    pub signature: [u8; SIGNATURE_LEN],
+}
+
+fn confirm_message(scope: &str, version: u64, hash: &[u8; 32], signer: &PublicKey) -> Result<Vec<u8>, Error> {
+    if version > MAX_VERSION {
+        return Err(Error::Format);
+    }
+    Ok(message("manifest-confirm", &[text(scope, MAX_CONTEXT)?, &version.to_be_bytes(), hash, signer.as_bytes()]))
+}
+
+/// An anchor or a signer confirms a version of a list it checked itself (e.g. management after a
+/// coordinator changed the team): with [`ChainOptions::require_anchor_on_latest`], a chain whose latest
+/// version is signed by someone else is accepted only with such a confirmation of exactly that version.
+/// The same bytes as `confirmManifest` in TypeScript (`RGN-SIG1`, kind `manifest-confirm`: scope, version,
+/// list hash, the confirming key).
+pub fn confirm_manifest(key: &SigningKey, list: &AcceptedManifest) -> Result<[u8; SIGNATURE_LEN], Error> {
+    Ok(key.sign_message(&confirm_message(&list.manifest.scope, list.manifest.version, &list.hash, &key.public_key())?))
+}
+
+/// Checks a confirmation made by [`confirm_manifest`] (signature only – not whether the key is trusted).
+pub fn verify_manifest_confirmation(signer: &PublicKey, list: &AcceptedManifest, signature: &[u8]) -> Result<(), Error> {
+    signer.verify_message(&confirm_message(&list.manifest.scope, list.manifest.version, &list.hash, signer)?, signature)
+}
+
+/// The latest version is signed by one of `keys`, or one of them confirmed it (one check per key).
+fn latest_confirmed(latest: &AcceptedManifest, keys: &[&PublicKey], confirmations: &[ManifestConfirmation]) -> bool {
+    if keys.contains(&&latest.signer) {
+        return true;
+    }
+    let mut tried: Vec<&PublicKey> = Vec::new();
+    for c in confirmations {
+        if !keys.contains(&&c.signer) || tried.contains(&&c.signer) {
+            continue;
+        }
+        tried.push(&c.signer);
+        if verify_manifest_confirmation(&c.signer, latest, &c.signature).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Structure of a chain from version 1 (scope, +1, links, epochs, seal versions, canonical blobs, valid
@@ -752,7 +823,8 @@ fn check_pins(out: &[AcceptedManifest], pinned: Option<&Pinned>) -> Result<(), E
 
 /// [`verify_manifest_chain_from_anchor`] with options (since 0.13.2): extra `signers`, anchors that may sign
 /// only for the anchor requirement (`anchors_may_sign = false`), and pins that meet the anchor requirement
-/// (`pinned_trusted`). Every version above version 1 (and above the pin when `pinned_trusted`) must be
+/// (`pinned_trusted`); since 0.15.1 `require_anchor_on_latest` (the latest version signed or confirmed by an
+/// anchor or one of `signers`, `Error::UntrustedSigner`). Every version above version 1 (and above the pin when `pinned_trusted`) must be
 /// signed by an admin of the previous version, by one of `signers` or – when `anchors_may_sign` – by an
 /// anchor (`Error::UntrustedSigner`); structural errors are `Error::BadChain`, withheld pinned versions
 /// `Error::Withheld`.
@@ -788,6 +860,12 @@ pub fn verify_manifest_chain_from_anchor_with(blobs: &[&[u8]], scope: &str, anch
     let pin_meets = opts.pinned.is_some() && opts.pinned_trusted;
     if !pin_meets && !out.iter().any(|a| anchors.contains(&a.signer)) {
         return Err(Error::UntrustedSigner);
+    }
+    if opts.require_anchor_on_latest {
+        let keys: Vec<&PublicKey> = anchors.iter().chain(&opts.signers).collect();
+        if !latest_confirmed(out.last().expect("not empty"), &keys, &opts.confirmations) {
+            return Err(Error::UntrustedSigner);
+        }
     }
     Ok(out)
 }
