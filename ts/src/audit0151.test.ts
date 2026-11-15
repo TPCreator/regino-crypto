@@ -1,6 +1,8 @@
 // Fixes after the audit of 0.15.0 (2026-11-15): each test failed before its fix (AUDIT.md § 4.5).
 import { signAsync } from '@noble/ed25519';
 import { describe, expect, it } from 'vitest';
+import lock from '../package-lock.json';
+import pkg from '../package.json';
 import { decryptBackup, encryptBackup } from './backup';
 import { newBackupCodeSecret } from './backupCode';
 import { newRecoverySecret } from './recovery';
@@ -47,5 +49,16 @@ describe('N3: the chunk list of a backup only in its canonical form (sorted, no 
     expect(await decryptBackup(s, b, 'demo')).toMatchObject({ ok: true, chunks: names });
     for (const chunks of [[...names].reverse(), [...names, names[0]], [names[0], names[0], names[1]]])
       expect(await decryptBackup(s, { ...b, chunks }, 'demo'), JSON.stringify(chunks)).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
+  });
+});
+
+describe('N6: runtime dependencies pinned exactly', () => {
+  it('every dependency is an exact version, the same as in the lock file', () => {
+    const locked = lock as unknown as { packages: Record<string, { version: string; dependencies?: Record<string, string> }> };
+    for (const [name, range] of Object.entries(pkg.dependencies)) {
+      expect(range, name).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(locked.packages['']?.dependencies?.[name], name).toBe(range);
+      expect(locked.packages[`node_modules/${name}`]?.version, name).toBe(range);
+    }
   });
 });
