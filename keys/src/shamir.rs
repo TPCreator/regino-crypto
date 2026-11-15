@@ -80,8 +80,7 @@ pub fn combine(parts: &[Vec<u8>]) -> Result<Key, Error> {
     }
     // blahaj does not wipe its own buffers (polynomials, shares); the recovered secret is wiped here
     let secret = Zeroizing::new(Sharks(threshold).recover(shares.iter()).map_err(|_| Error::BadShares)?);
-    let bytes: [u8; KEY_LEN] = secret.as_slice().try_into().map_err(|_| Error::BadShares)?;
-    let key = Key::from_bytes(bytes);
+    let key = Key::from_slice(&secret).map_err(|_| Error::BadShares)?;
     // The fingerprint verifies the key – compared in constant time like any other secret-derived value.
     if !bool::from(fingerprint(&key).ct_eq(&fp)) {
         return Err(Error::BadShares);

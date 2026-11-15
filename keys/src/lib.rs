@@ -16,7 +16,7 @@
 //! A backup made before still carries the wrapped key; the app must handle such backups.
 
 use subtle::ConstantTimeEq;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 pub mod backup_chunks;
 pub mod backup_code;
@@ -34,17 +34,40 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const KEY_LEN: usize = 32;
 
-/// 256-bit key; its memory is zeroed when dropped.
-pub struct Key(Zeroizing<[u8; KEY_LEN]>);
+/// 256-bit key; its memory is zeroed when dropped. The bytes live in one place on the heap (since 0.15.1):
+/// moving or returning a `Key` moves a pointer, not copies of the key that would stay behind unwiped.
+pub struct Key(Box<Zeroizing<[u8; KEY_LEN]>>);
 
 impl Key {
     pub fn generate() -> Result<Key, Error> {
-        let mut b = Zeroizing::new([0u8; KEY_LEN]);
-        getrandom::fill(b.as_mut()).map_err(|e| Error::Random(e.to_string()))?;
-        Ok(Key(b))
+        Key::fill(|b| getrandom::fill(b).map_err(|e| Error::Random(e.to_string())))
     }
-    pub fn from_bytes(bytes: [u8; KEY_LEN]) -> Key {
-        Key(Zeroizing::new(bytes))
+
+    /// Key from bytes. The argument is a copy the caller passes by value; it is wiped here, but the
+    /// caller's own variable is the caller's to wipe (`Zeroizing`) – inside the core keys are written in
+    /// place ([`Key::fill`]) without such copies.
+    pub fn from_bytes(mut bytes: [u8; KEY_LEN]) -> Key {
+        let k = Key::from_slice(&bytes).expect("32 bytes");
+        bytes.zeroize();
+        k
+    }
+
+    /// Key written in place by `f` into zeroed memory (nothing to wipe elsewhere).
+    pub(crate) fn fill<E>(f: impl FnOnce(&mut [u8; KEY_LEN]) -> Result<(), E>) -> Result<Key, E> {
+        let mut k = Key(Box::new(Zeroizing::new([0u8; KEY_LEN])));
+        f(&mut k.0)?;
+        Ok(k)
+    }
+
+    /// Key copied from exactly 32 bytes (`Error::Format` otherwise).
+    pub(crate) fn from_slice(bytes: &[u8]) -> Result<Key, Error> {
+        if bytes.len() != KEY_LEN {
+            return Err(Error::Format);
+        }
+        Key::fill(|b| {
+            b.copy_from_slice(bytes);
+            Ok(())
+        })
     }
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
@@ -54,7 +77,7 @@ impl Key {
 impl PartialEq for Key {
     /// Constant-time comparison (`subtle`), so a wrong key is not revealed byte by byte through timing.
     fn eq(&self, other: &Self) -> bool {
-        self.0.as_ref().ct_eq(other.0.as_ref()).into()
+        self.as_bytes().ct_eq(other.as_bytes()).into()
     }
 }
 

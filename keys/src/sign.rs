@@ -70,8 +70,10 @@ impl SigningKey {
 
     /// The seed – the only thing to store (wrapped).
     pub fn seed(&self) -> Key {
-        let bytes = Zeroizing::new(self.0.to_bytes());
-        Key::from_bytes(*bytes)
+        let mut bytes = self.0.to_bytes();
+        let k = Key::from_bytes(bytes);
+        bytes.zeroize();
+        k
     }
 
     /// Signing key derived from a key the app keeps anyway (e.g. the master key) with HKDF-SHA256,

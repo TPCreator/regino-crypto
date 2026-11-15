@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::kdf::{self, KdfParams};
-use crate::{Error, Key, KEY_LEN};
+use crate::{Error, Key};
 
 pub const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// Characters of a code (15 data + 1 check).
@@ -219,9 +219,7 @@ pub fn stretch(code: &BackupCode, salt: &[u8; 16], params: KdfParams) -> Result<
 }
 
 fn expand(ikm: &Key, info: &str) -> Key {
-    let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    Hkdf::<Sha256>::new(Some(&[]), ikm.as_bytes()).expand(info.as_bytes(), out.as_mut()).expect("32 bytes is a valid HKDF length");
-    Key::from_bytes(*out)
+    Key::fill(|out| Hkdf::<Sha256>::new(Some(&[]), ikm.as_bytes()).expand(info.as_bytes(), out)).expect("32 bytes is a valid HKDF length")
 }
 
 /// Key of a version-3 backup: HKDF-SHA256(Argon2id(code, header salt, header parameters), `<app> backup v3 code16`)

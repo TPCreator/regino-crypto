@@ -39,3 +39,18 @@ fn n2_signature_before_member_keys() {
     assert_eq!(sign::sign_prepared(&a, msg, None), Err(Error::Format));
     assert!(sign::open_manifest(&blob).is_ok());
 }
+
+/// N5: a `Key` keeps its bytes in one place (moving it moves a pointer, no unwiped copies), and the
+/// AEAD and Argon2id crates wipe their own key state and memory blocks (feature `zeroize`).
+#[test]
+fn n5_key_in_one_place_and_zeroize_features() {
+    assert_eq!(std::mem::size_of::<Key>(), std::mem::size_of::<usize>());
+    let k = Key::from_bytes([7; 32]);
+    assert_eq!(k.as_bytes(), &[7; 32]);
+    assert!(Key::generate().unwrap() != k);
+    let manifest = include_str!("../Cargo.toml");
+    for dep in ["argon2", "chacha20poly1305", "aes-gcm"] {
+        let line = manifest.lines().find(|l| l.starts_with(&format!("{dep} ="))).expect(dep);
+        assert!(line.contains("\"zeroize\""), "{line}");
+    }
+}
