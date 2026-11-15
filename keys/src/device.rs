@@ -13,9 +13,8 @@
 
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::Zeroizing;
 
-use crate::{Error, Key, KEY_LEN};
+use crate::{Error, Key};
 
 /// Shortest accepted device secret (bytes).
 pub const MIN_SECRET: usize = 32;
@@ -38,11 +37,7 @@ pub fn device_key(secret: &[u8], app: &str, method: &str) -> Result<Key, Error> 
         return Err(Error::Format);
     }
     let info = info(app, method)?;
-    let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    Hkdf::<Sha256>::new(None, secret)
-        .expand(info.as_bytes(), out.as_mut())
-        .map_err(|_| Error::Format)?;
-    Ok(Key::from_bytes(*out))
+    Key::fill(|out| Hkdf::<Sha256>::new(None, secret).expand(info.as_bytes(), out).map_err(|_| Error::Format))
 }
 
 #[cfg(test)]

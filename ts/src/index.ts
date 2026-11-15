@@ -8,6 +8,7 @@ export {
   DEFAULT_BACKUP_CODE_KDF,
   MAX_BACKUP_CODE_KDF,
   MIN_BACKUP_CODE_KDF,
+  MOBILE_BACKUP_CODE_KDF,
   backupCodeId,
   backupCodeQrText,
   formatBackupCode,

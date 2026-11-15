@@ -310,12 +310,26 @@ export async function signedWrapForDevice(
   return { v: SIGNED_WRAP_VERSION, id: objectId, ver: epoch, m: b64(list.hash), w, k: b64(who.publicKey), s: b64(s) };
 }
 
+/** Options of `openSignedWrap`. */
+export interface OpenWrapOptions {
+  /** since 0.13.1: the key must be for this member of the list, wrapped for the seal the list names */
+  recipientId?: string;
+  /**
+   * since 0.15.1: the key must be of the list's own epoch (`ver` = `epoch` of the list), not of an earlier
+   * one – for the key an app seals new items with. A genuine key of an earlier epoch, signed by an admin
+   * of the same list (to give a new member older keys), is refused, so a server cannot hand it out as the
+   * current one (rollback to a key a removed member still knows). Off by default (0.15.0 behaviour).
+   */
+  requireCurrentEpoch?: boolean;
+}
+
 /**
  * Checks, then unwraps: the key must be for `objectId`, for the list the recipient accepted itself as
  * the latest (`list` – its hash), for an epoch not above the list's (earlier epochs are allowed: a new
  * member gets older keys too), signed by an **admin** of that list, by the **signer of that list** (a
  * coordinator handing over in this version) or by one of `anchors` (e.g. the centre's management), with
- * a valid signature. Returns the key, the signer and the epoch; throws otherwise.
+ * a valid signature. Returns the key, the signer and the epoch; throws otherwise. With
+ * `requireCurrentEpoch` only a key of the list's epoch is accepted (`OpenWrapOptions`).
  */
 export async function openSignedWrap(
   signed: SignedWrappedKey,
@@ -325,7 +339,7 @@ export async function openSignedWrap(
   objectId: string,
   list: AcceptedManifest,
   anchors: readonly Uint8Array[] = [],
-  opts: { recipientId?: string } = {},
+  opts: OpenWrapOptions = {},
 ): Promise<{ groupKey: Uint8Array; signer: Uint8Array; epoch: number }> {
   if (!signed || signed.v !== SIGNED_WRAP_VERSION) throw new Error("Unsupported signed wrapped key version.");
   // since 0.13.1: the key must be for the member `recipientId` of the list, wrapped for the seal the list names
@@ -341,7 +355,8 @@ export async function openSignedWrap(
   } catch {
     throw new Error("Invalid signed wrapped key.");
   }
-  if (signed.id !== objectId || !(signed.ver <= list.manifest.epoch) || !equalBytes(manifest, list.hash))
+  const epochOk = opts.requireCurrentEpoch === true ? signed.ver === list.manifest.epoch : signed.ver <= list.manifest.epoch;
+  if (signed.id !== objectId || !epochOk || !equalBytes(manifest, list.hash))
     throw new Error("The signed key is for another object, epoch or member list.");
   if (!anchors.some((k) => equalBytes(k, signer)) && !equalBytes(signer, list.signer) && !memberByKey(list.manifest, signer)?.admin)
     throw new Error("The sender of the key is not trusted.");
@@ -407,13 +422,19 @@ const ZERO32 = new Uint8Array(32);
 
 /** The bytes that sign a list (`signer` = the signer's public key) – for a `Signer` outside TypeScript. */
 export function manifestMessage(m: Manifest, signer: Uint8Array): Uint8Array {
+  return encodeManifest(m, signer, true);
+}
+
+/** `checkKeys = false` (only `openManifest`, before the signature): members' keys are checked by the caller. */
+function encodeManifest(m: Manifest, signer: Uint8Array, checkKeys: boolean): Uint8Array {
   if (!m || !Array.isArray(m.members) || m.members.length > MAX_MEMBERS) throw new Error("Invalid manifest.");
   const prev = bytes(m.prev, 32, 32, "previous hash");
   if (m.version === 0 || (m.version === 1) !== equalBytes(prev, ZERO32)) throw new Error("Invalid manifest version or previous hash.");
   const members = m.members.map((x) => ({ x, id: text(x.id, MAX_NAME, "member id") }));
   members.sort((a, b) => compareBytes(a.id, b.id));
   if (members.some((e, i) => i > 0 && equalBytes(e.id, members[i - 1]!.id))) throw new Error("Duplicate member id.");
-  members.forEach((e) => checkPublic(e.x.sign, "member signing"));
+  // openManifest reads each key as 32 bytes and checks the points after the signature
+  if (checkKeys) members.forEach((e) => checkPublic(e.x.sign, "member signing"));
   const keys = new Set(members.map((e) => b64(e.x.sign)));
   if (keys.size !== members.length) throw new Error("Duplicate member signing key.");
   const fields = [text(m.scope, MAX_CONTEXT, "scope"), u64(m.version), u64(m.epoch), prev, signer, u32(members.length)];
@@ -537,12 +558,14 @@ export async function openManifest(blob: Uint8Array): Promise<AcceptedManifest> 
     if (!r.done) throw new Error();
     manifest = { scope, version, epoch, prev, members };
     checkPublic(signer);
-    // canonical: encoding the decoded list again must give the same bytes (sorted ids, limits)
-    if (!equalBytes(manifestMessage(manifest, signer), msg)) throw new Error();
+    // canonical: encoding the decoded list again must give the same bytes (sorted ids, limits); the
+    // members' keys (up to MAX_MEMBERS point decodings) only after the signature (since 0.15.1)
+    if (!equalBytes(encodeManifest(manifest, signer, false), msg)) throw new Error();
   } catch {
     throw new Error("Not a valid member list.");
   }
   if (!(await verifyEd25519(signer, msg, blob.subarray(msg.length)))) throw new Error("Invalid signature of the member list.");
+  if (!manifest.members.every((x) => isSigningPublicKey(x.sign))) throw new Error("Not a valid member list.");
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", blob as BufferSource));
   return { manifest, signer, hash, blob: blob.slice() };
 }
@@ -630,6 +653,42 @@ export interface ChainOptions {
   anchorsMaySign?: boolean;
   /** the pinned versions were accepted before: matching pins meet the anchor requirement, versions up to the pin are checked only for structure */
   pinnedTrusted?: boolean;
+  /**
+   * since 0.15.1: the **latest** version must be signed by an anchor or by one of `signers`, or confirmed
+   * by one of them (`confirmations`, `confirmManifest`) – an admin who was removed in a version the server
+   * withholds cannot continue the chain from an older version for someone who restores. Off by default.
+   */
+  requireAnchorOnLatest?: boolean;
+  /** confirmations of the latest version by anchors or `signers` (only with `requireAnchorOnLatest`) */
+  confirmations?: readonly ManifestConfirmation[];
+}
+
+/** An anchor's (or signer's) confirmation of one version of a list (since 0.15.1, `confirmManifest`). */
+export interface ManifestConfirmation {
+  signer: Uint8Array;
+  signature: Uint8Array;
+}
+
+/** The bytes that confirm a list (`signer` = the confirming public key) – for a `Signer` outside TypeScript. */
+export function manifestConfirmationMessage(list: AcceptedManifest, signer: Uint8Array): Uint8Array {
+  checkPublic(signer);
+  return message("manifest-confirm", [text(list.manifest.scope, MAX_CONTEXT, "scope"), u64(list.manifest.version), bytes(list.hash, 32, 32, "list hash"), signer]);
+}
+
+/**
+ * An anchor or a signer confirms a version of a list it checked itself (e.g. management after a
+ * coordinator changed the team): with `requireAnchorOnLatest`, a chain whose latest version is signed by
+ * someone else is accepted only with such a confirmation of exactly that version (its hash).
+ */
+export async function confirmManifest(signer: Signer | Uint8Array, list: AcceptedManifest): Promise<Uint8Array> {
+  const who = await asSigner(signer);
+  return who.sign(manifestConfirmationMessage(list, who.publicKey));
+}
+
+/** Checks a confirmation made by `confirmManifest` (signature only – not whether the key is trusted). */
+export async function verifyManifestConfirmation(signer: Uint8Array, list: AcceptedManifest, signature: Uint8Array): Promise<boolean> {
+  if (!isSigningPublicKey(signer)) return false;
+  return verifyEd25519(signer, manifestConfirmationMessage(list, signer), signature);
 }
 
 const has = (keys: readonly Uint8Array[], k: Uint8Array) => keys.some((x) => equalBytes(x, k));
@@ -670,7 +729,8 @@ function checkPins(out: readonly AcceptedManifest[], p?: PinnedManifest): void {
  * (fail-closed). With `pinned`, a different hash for a pinned version is a fork and a chain that ends
  * before the pinned version means newer lists are withheld – both throw. With `pinnedTrusted` (the pins
  * were accepted before), matching pins meet the anchor requirement and versions up to the pin are checked
- * only for structure, signatures and links. Returns every accepted version, oldest first.
+ * only for structure, signatures and links. With `requireAnchorOnLatest` (since 0.15.1) the latest version
+ * must also be signed or confirmed by an anchor or one of `signers`. Returns every accepted version, oldest first.
  */
 export async function verifyManifestChainFromAnchor(
   blobs: readonly Uint8Array[],
@@ -690,7 +750,21 @@ export async function verifyManifestChainFromAnchor(
   checkPins(out, opts.pinned);
   const pinMeets = opts.pinned !== undefined && opts.pinnedTrusted === true;
   if (!pinMeets && !out.some((a) => has(anchors, a.signer))) throw new Error("The signer of the member list is not trusted (no version signed by an anchor).");
+  if (opts.requireAnchorOnLatest === true && !(await latestConfirmed(out[out.length - 1]!, [...anchors, ...signers], opts.confirmations ?? [])))
+    throw new Error("The signer of the member list is not trusted (the latest version is not signed or confirmed by an anchor).");
   return out;
+}
+
+/** The latest version is signed by one of `keys`, or one of them confirmed it (one check per key). */
+async function latestConfirmed(latest: AcceptedManifest, keys: readonly Uint8Array[], confirmations: readonly ManifestConfirmation[]): Promise<boolean> {
+  if (has(keys, latest.signer)) return true;
+  const tried = new Set<string>();
+  for (const c of confirmations) {
+    if (!(c?.signer instanceof Uint8Array) || !has(keys, c.signer) || tried.has(b64(c.signer))) continue;
+    tried.add(b64(c.signer));
+    if (await verifyManifestConfirmation(c.signer, latest, c.signature)) return true;
+  }
+  return false;
 }
 
 /** One version read by `inspectManifestChain` – **not trusted**: nobody vouched for the signers yet. */

@@ -3,8 +3,8 @@
 //!
 //! Order that survives a power cut at any moment:
 //! 1. every chunk is written as `<name>.rgb.tmp`, `fsync`, renamed, the folder `fsync`-ed ([`put_chunk`]);
-//!    a chunk that already exists is skipped (same name = same content), so an interrupted backup
-//!    resumes where it stopped;
+//!    a chunk that already exists intact is skipped (same name = same content), so an interrupted backup
+//!    resumes where it stopped ([`put_chunk_verified`] opens the existing file to tell);
 //! 2. the backup itself (the manifest, `backups::write_backup`) is written **last** and lists its chunks
 //!    in plain text (`chunks`, bound in its AAD);
 //! 3. [`gc_chunks`] deletes chunks no backup lists and leftover `.tmp` files – only those older than
@@ -35,15 +35,34 @@ pub fn has_chunk(chunk_dir: &Path, name: &str) -> Result<bool, BackupError> {
     Ok(chunk_path(chunk_dir, name)?.is_file())
 }
 
-/// Writes a sealed chunk durably; returns `false` when it was already there with the same size (nothing written).
+/// Writes a sealed chunk durably; returns `false` when exactly these bytes were already there (nothing written).
+///
+/// An existing file of another size (truncated, empty – 0.13.4) or with other bytes of the same size
+/// (a flipped bit, a sync glitch – 0.15.1) is written again, so a damaged chunk is not referenced by every
+/// later backup. For copying a chunk (the same bytes) this is exact. A chunk sealed again from the same
+/// content has a new nonce, so its bytes differ from an intact file – use [`put_chunk_verified`] with a
+/// check that opens the existing file, to keep an intact one instead of rewriting it.
 pub fn put_chunk(chunk_dir: &Path, name: &str, blob: &[u8]) -> Result<bool, BackupError> {
     let target = chunk_path(chunk_dir, name)?;
-    // An existing file is trusted only when it has the expected size: the sealed blob of one content always has
-    // the same length, so a truncated or empty file (interrupted copy, sync glitch) is written again instead of
-    // being referenced by every later backup (0.13.4).
-    if fs::metadata(&target).is_ok_and(|m| m.is_file() && m.len() == blob.len() as u64) {
+    let same = fs::metadata(&target).is_ok_and(|m| m.is_file() && m.len() == blob.len() as u64) && fs::read(&target).is_ok_and(|old| old == blob);
+    if same {
         return Ok(false);
     }
+    write_chunk(chunk_dir, name, &target, blob)
+}
+
+/// [`put_chunk`] that keeps an existing file when `intact(existing bytes)` says so (e.g.
+/// `|b| keys.open(name, b).is_ok()` with `regino_keys::backup_chunks::BackupChunkKeys`, which also checks
+/// the name against the content) and writes `blob` otherwise. Returns `false` when it kept the file.
+pub fn put_chunk_verified(chunk_dir: &Path, name: &str, blob: &[u8], intact: impl FnOnce(&[u8]) -> bool) -> Result<bool, BackupError> {
+    let target = chunk_path(chunk_dir, name)?;
+    if target.is_file() && fs::read(&target).is_ok_and(|old| intact(&old)) {
+        return Ok(false);
+    }
+    write_chunk(chunk_dir, name, &target, blob)
+}
+
+fn write_chunk(chunk_dir: &Path, name: &str, target: &Path, blob: &[u8]) -> Result<bool, BackupError> {
     fs::create_dir_all(chunk_dir)?;
     let tmp = chunk_dir.join(format!("{name}.{CHUNK_EXT}.tmp"));
     {
@@ -51,7 +70,7 @@ pub fn put_chunk(chunk_dir: &Path, name: &str, blob: &[u8]) -> Result<bool, Back
         f.write_all(blob)?;
         f.sync_all()?;
     }
-    fs::rename(&tmp, &target)?;
+    fs::rename(&tmp, target)?;
     #[cfg(unix)]
     fs::File::open(chunk_dir)?.sync_all()?;
     Ok(true)
@@ -194,6 +213,27 @@ mod tests {
         assert!(put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
         assert_eq!(read_chunk(&kd, &name(1)).unwrap(), b"sealed chunk");
         assert!(!put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
+    }
+
+    /// 0.15.1 (audit N4): a damaged chunk of the right size is written again; an intact one is left alone.
+    #[test]
+    fn damaged_chunk_of_the_same_size_is_rewritten() {
+        let root = tempfile::tempdir().unwrap();
+        let kd = root.path().join("kusky");
+        let path = kd.join(format!("{}.rgb", name(1)));
+        assert!(put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
+        fs::write(&path, b"sealed chunX").unwrap();
+        assert!(put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
+        assert_eq!(read_chunk(&kd, &name(1)).unwrap(), b"sealed chunk");
+        assert!(!put_chunk(&kd, &name(1), b"sealed chunk").unwrap());
+        // with a check of the existing file (e.g. opening it with the chunk keys): kept when intact, even
+        // when the new blob differs (a fresh nonce), written again when the check fails
+        assert!(!put_chunk_verified(&kd, &name(1), b"sealed again", |old| old == b"sealed chunk").unwrap());
+        assert_eq!(read_chunk(&kd, &name(1)).unwrap(), b"sealed chunk");
+        fs::write(&path, b"sealed chunX").unwrap();
+        assert!(put_chunk_verified(&kd, &name(1), b"sealed again", |old| old == b"sealed chunk").unwrap());
+        assert_eq!(read_chunk(&kd, &name(1)).unwrap(), b"sealed again");
+        assert!(put_chunk_verified(&kd, &name(2), b"new", |_| true).unwrap());
     }
 
     #[test]

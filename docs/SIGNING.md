@@ -42,8 +42,10 @@ checked by the app automatically.
 | `open_manifest` / `openManifest` | Read a blob the app accepted earlier and stored itself (checks format and signature, not trust). |
 | `verify_manifest_chain_from_anchor` / `verifyManifestChainFromAnchor` (0.13.1) | For someone who joins or restores without a trusted list: the whole chain from version 1, which is taken with its own signer; every later version must continue the previous one; at least one version must be **signed by an anchor** (its signature confirms all earlier versions through `prev`), otherwise nothing is accepted (fail-closed). With `pinned` (`{ version, hashes }` – the hashes of the last versions up to `version` the app accepted before; one is enough): another hash for a pinned version is a fork (`BadChain`), a chain shorter than the pinned version is withheld (Rust `Error::Withheld`). Returns all accepted versions. |
 | `ChainOptions` / `verify_manifest_chain_from_anchor_with` (Rust), options of `verifyManifestChainFromAnchor` (TS) (0.13.2) | Defaults keep 0.13.1. **`signers`**: keys that may sign any next version even when they are no admin of the previous one (e.g. management keys from the accepted centre list) – not for v1 nor for the anchor requirement. **`anchorsMaySign`** (default true): with false an anchor only meets the anchor requirement (e.g. by signing v1, vouching for what came before through `prev`); later versions are signed by an admin of the previous version or one of `signers`. **`pinnedTrusted`**: the pinned versions were accepted before – matching pins meet the anchor requirement and versions up to the pin are checked only for structure, signatures and links; versions above the pin need an admin of the previous version, `signers` or (with `anchorsMaySign`) an anchor. Fork → `BadChain`, withheld → `Withheld`, stranger above the pin → `UntrustedSigner`. |
+| `require_anchor_on_latest` / `requireAnchorOnLatest`, `confirm_manifest` / `confirmManifest`, `verify_manifest_confirmation` / `verifyManifestConfirmation` (0.15.1) | Option of the chain from an anchor, **off by default**: the **latest** version must be signed by an anchor or one of `signers`, or **confirmed** by one of them – a confirmation is a signature of kind `manifest-confirm` over scope, version and hash of exactly that version (`confirmations: [{ signer, signature }]`; one check per trusted key, others skipped). Without it a removed admin can continue an older version for someone who restores (below, "Removed admin and a restore"). Refused → `UntrustedSigner`. |
 | `inspect_manifest_chain` / `inspectManifestChain` (0.13.2) | **Structure only, no trust**: scope, version + 1, links, epochs, seal versions, canonical blobs, signatures valid for the signer named in each blob, pins (fork, withheld); bad signature → `BadSignature`. Returns `{ version, epoch, signer, members, hash }` per version for a table management looks at after a restore. **The result is not trustworthy until someone approves it** – it must never be used to accept keys; after approval the app pins the hash of the last version and continues with `pinnedTrusted`. |
 | `verify_wrap_for_recipient` (Rust), `openSignedWrap(…, { recipientId })` (TS) (0.13.1) | In addition to the checks above: the recipient must be the member `recipientId` of the list and its `seal` must be the key the wrapped key is for. |
+| `verify_wrap_for_with(…, &WrapOptions { require_current_epoch: true, .. })` (Rust), `openSignedWrap(…, { requireCurrentEpoch: true })` (TS) (0.15.1) | **Off by default.** The key must be of the list's **own** epoch (`ver` = `epoch` of the list), not of an earlier one. Earlier epochs are signed on purpose (a new member gets the older keys), so without the option a server can serve a genuine older key – one a removed member still knows – as if it were the current one, and the app would seal new items under it. Use it where the app takes **the key to seal new items with**; open older keys (to read older items) without it. Refused → `BadChain` / "another object, epoch or member list". |
 | `group_key_code` / `groupKeyCode`, `group_key_id` / `groupKeyId` (0.13.1) | From a group key (e.g. the case key): a code for comparing by phone (80 bits, `3f2a 9c01 …`, HMAC-SHA256 over a context with a key from HKDF-SHA256 info `regino group-key code v1`) and a key-bound id of 24 hex characters (info `regino group-key id v1`, HMAC over a label). Independent of the sealing keys; replaces the use of `backupChunkName` for these purposes. |
 | `verifyEd25519` (TS) | The strict check behind all of the above. |
 
@@ -56,7 +58,7 @@ Every signed message is
 ```
 
 so no two different field lists give the same bytes, and a signature of one kind is never valid as
-another kind (`kind` is `data`, `wrap`, `manifest` or `member-key`). Numbers are u64 big-endian, at most 2^53 − 1
+another kind (`kind` is `data`, `wrap`, `manifest`, `member-key` or – since 0.15.1 – `manifest-confirm`). Numbers are u64 big-endian, at most 2^53 − 1
 (the largest whole number TypeScript holds exactly; refused above it on both sides).
 
 | Kind | Fields |
@@ -64,6 +66,7 @@ another kind (`kind` is `data`, `wrap`, `manifest` or `member-key`). Numbers are
 | `data` | context (UTF-8, 1–1024 B), data |
 | `wrap` | context, object id (1–1024 B), version (u64), list hash (32 B), recipient public key (1–1024 B), signer public key (32 B), wrapped (1–65 536 B) |
 | `member-key` | scope (1–1024 B), member id (1–256 B), version (u64), seal key (1–1024 B) |
+| `manifest-confirm` (0.15.1) | scope (1–1024 B), version (u64), list hash (32 B), confirming public key (32 B) |
 | `manifest` | scope (1–1024 B), version (u64, ≥ 1), epoch (u64), prev (32 B), signer public key (32 B), member count (u32, ≤ 1000), then per member sorted by the UTF-8 bytes of the id: id (1–256 B, unique), role (1–256 B), admin (1 B: 0 or 1), signing key (32 B, unique in the list), seal version (u64; 0 exactly when the seal is empty), seal key (0–1024 B) |
 
 Texts are UTF-8 exactly as given – a leading U+FEFF is kept, not stripped, on both sides.
@@ -151,6 +154,17 @@ it sees for a version and refuses the other afterwards, so the members split. Wh
   it); once approved, the app pins the last hash and verifies later updates with `pinned_trusted`, so
   the anchor need not sign again.
 
+**Removed admin and a restore (audit S1, 0.15.1).** Alice and Bob are admins of v1 (signed by the
+anchor). Alice removes Bob in v2 (new epoch). Bob, still admin of **v1**, signs a v2′ that continues v1
+and adds Mallory. A member who restores without pins gets `[v1, v2′]` from the server (which withholds
+v2): v1 is signed by the anchor, v2′ by an admin of v1 – the chain rule accepts it, and so do the default
+options. With **`require_anchor_on_latest`** the latest version itself must be signed by an anchor (or one
+of `signers`) or carry a confirmation by one of them; Bob is neither, so v2′ is refused. The cost: every
+time a coordinator (not management) signs a new version, management confirms it once
+(`confirm_manifest(managementKey, acceptedList)` → the server stores the 64 bytes next to the blob and
+returns them with the chain). Apps that let people restore without pins should turn the option on; the
+default stays as in 0.15.0 so nothing changes for apps that do not.
+
 **Rules for the chain options (after the review of 0.13.2):**
 
 - **Anchors are not put into `signers`.** `signers` may sign any next version; an anchor there would
@@ -185,6 +199,8 @@ chain is decoded, re-encoded (canonical check) and its signature verified exactl
 | Adds itself or a key of its own to the member list, removes the coordinator, swaps keys | The list must be signed by an admin of the previous list or an anchor and chain to it by hash |
 | Replays an older list as if it were newer | Versions must increase by exactly one from what the app accepted; an older list, or another list with a version the app already has, is refused. A fork the member sees first is **not** detected by the core (see Forks) |
 | Moves a signed wrapped key to another case, epoch or recipient | All of them are signed; a mismatch is refused |
+| Serves a genuine key of an earlier epoch as the current one (rollback to a key a removed member knows) | Refused with `require_current_epoch` / `requireCurrentEpoch` (0.15.1) where the app opens the key it seals new items with |
+| Gives a restoring member the chain of a removed admin (v1 → v2′, the removal v2 withheld) | Refused with `require_anchor_on_latest` (0.15.1): the latest version must be signed or confirmed by an anchor or a signer |
 | Crafts a signature valid in one implementation and not in the other | Same verdict on both sides (above), tested |
 
 ## What it does NOT protect

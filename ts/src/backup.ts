@@ -161,10 +161,21 @@ export async function encryptBackup(
 
 export type DecryptError = 'not-backup' | 'newer-version' | 'wrong-key-or-damaged';
 
+/** Options of `decryptBackup` (since 0.15.1). */
+export interface DecryptOptions {
+  /**
+   * Lower upper bound of the Argon2id parameters this reader accepts from a header (e.g.
+   * `MOBILE_BACKUP_CODE_KDF` on a phone); a costlier header is `not-backup`, refused before any work.
+   * It only narrows `MAX_BACKUP_CODE_KDF`.
+   */
+  maxKdf?: Readonly<BackupCodeKdf & { work: number }>;
+}
+
 export async function decryptBackup<T = unknown>(
   secret: Uint8Array,
   file: unknown,
   app: string,
+  options: DecryptOptions = {},
 ): Promise<{ ok: true; payload: T; createdAt: string; chunks?: string[] } | { ok: false; error: DecryptError }> {
   const f = file as Partial<EncryptedBackup> | null;
   const format = formatOf(app);
@@ -185,14 +196,16 @@ export async function decryptBackup<T = unknown>(
   // Version 3: kind of secret and Argon2id parameters within bounds, checked before any work
   // (a planted header must not start an Argon2id of gigabytes).
   const kdf = version === 3 ? f.kdf : undefined;
-  if (version === 3 && (f.secret !== BACKUP_CODE_SECRET || kdf?.name !== 'argon2id' || !validBackupCodeKdf(kdf)))
+  if (version === 3 && (f.secret !== BACKUP_CODE_SECRET || kdf?.name !== 'argon2id' || !validBackupCodeKdf(kdf, options.maxKdf)))
     return { ok: false, error: 'not-backup' };
   // A secret of the other kind cannot open the backup (checked without deriving anything).
   if ((version === 3) !== isBackupCodeSecret(secret)) return { ok: false, error: 'wrong-key-or-damaged' };
   try {
     const salt = unb64(f.salt);
     if (salt.length !== 16) throw new Error('The salt must have 16 bytes.');
-    const chunksOk = Array.isArray(f.chunks) && f.chunks.every((c) => typeof c === 'string');
+    // canonical only (since 0.15.1): sorted, no duplicates – the form encryptBackup writes; the AAD binds the
+    // sorted unique list, so a reordered or doubled list would open and be handed to the app as it is
+    const chunksOk = Array.isArray(f.chunks) && f.chunks.every((c, i, a) => typeof c === 'string' && (i === 0 || (a[i - 1] as string) < c));
     if (version === 2 && !chunksOk) throw new Error('Missing chunk list.');
     if (version === 3 && f.chunks !== undefined && !(chunksOk && (f.chunks as string[]).length)) throw new Error('Invalid chunk list.');
     const key = kdf ? await codeBackupKey(secret, salt, kdf, app) : await backupKey(secret, salt, app);

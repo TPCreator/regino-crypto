@@ -70,8 +70,10 @@ impl SigningKey {
 
     /// The seed – the only thing to store (wrapped).
     pub fn seed(&self) -> Key {
-        let bytes = Zeroizing::new(self.0.to_bytes());
-        Key::from_bytes(*bytes)
+        let mut bytes = self.0.to_bytes();
+        let k = Key::from_bytes(bytes);
+        bytes.zeroize();
+        k
     }
 
     /// Signing key derived from a key the app keeps anyway (e.g. the master key) with HKDF-SHA256,
@@ -247,6 +249,38 @@ pub fn verify_wrap_for(
     verify_wrap(signer, st, signature)
 }
 
+/// Options of [`verify_wrap_for_with`] (since 0.15.1). `WrapOptions::default()` = [`verify_wrap_for`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WrapOptions<'a> {
+    /// As [`verify_wrap_for_recipient`]: the key must be wrapped for this member's `seal`.
+    pub recipient_id: Option<&'a str>,
+    /// The key must be of the list's own epoch (`version` = `epoch` of the list), not of an earlier one – for
+    /// the key an app seals new items with. A genuine key of an earlier epoch, signed by an admin of the same
+    /// list (to give a new member older keys), is refused (`Error::BadChain`), so a server cannot hand it out
+    /// as the current one (rollback to a key a removed member still knows).
+    pub require_current_epoch: bool,
+}
+
+/// [`verify_wrap_for`] with options (since 0.15.1, the same as `openSignedWrap(…, opts)` in TypeScript).
+pub fn verify_wrap_for_with(
+    list: &AcceptedManifest,
+    anchors: &[PublicKey],
+    signer: &PublicKey,
+    st: &WrapStatement,
+    signature: &[u8],
+    opts: &WrapOptions,
+) -> Result<(), Error> {
+    if let Some(id) = opts.recipient_id {
+        if !list.manifest.members.iter().any(|m| m.id == id && !m.seal.is_empty() && m.seal == st.recipient) {
+            return Err(Error::BadChain);
+        }
+    }
+    if opts.require_current_epoch && st.version != list.manifest.epoch {
+        return Err(Error::BadChain);
+    }
+    verify_wrap_for(list, anchors, signer, st, signature)
+}
+
 /// [`verify_wrap_for`] and also that the key was wrapped for the member `recipient_id` of that list: the
 /// member must be in the list and its `seal` must be the recipient key of the statement (`Error::BadChain`
 /// otherwise) – so a key wrapped for someone else's key, or for a key the list does not name, is refused.
@@ -258,10 +292,7 @@ pub fn verify_wrap_for_recipient(
     signature: &[u8],
     recipient_id: &str,
 ) -> Result<(), Error> {
-    if !list.manifest.members.iter().any(|m| m.id == recipient_id && !m.seal.is_empty() && m.seal == st.recipient) {
-        return Err(Error::BadChain);
-    }
-    verify_wrap_for(list, anchors, signer, st, signature)
+    verify_wrap_for_with(list, anchors, signer, st, signature, &WrapOptions { recipient_id: Some(recipient_id), ..WrapOptions::default() })
 }
 
 /// A member vouches for its own sealing key: scope, its member id, a version that only goes up, the key.
@@ -318,7 +349,7 @@ pub fn verify_member_key(
 }
 
 /// Signs a message prepared elsewhere (e.g. by the TypeScript side: `wrapMessage`, `manifestMessage`,
-/// `memberKeyMessage`, `dataMessage`) – for apps that keep the signing key in Rust. The message must be a
+/// `memberKeyMessage`, `dataMessage`, since 0.15.1 `manifestConfirmationMessage`) – for apps that keep the signing key in Rust. The message must be a
 /// well-formed `RGN-SIG1` message of a known kind with the right number of fields; a `wrap` or `manifest`
 /// must name this key as the signer, and a `manifest` must decode to a valid list; a `data` message must
 /// have a context starting with `data_prefix` when one is given (Dôverník: `dovernik|`) – since 0.13.1 the
@@ -366,6 +397,17 @@ pub fn sign_prepared(key: &SigningKey, message: &[u8], data_prefix: Option<&str>
             version: u64::from_be_bytes((*ver).try_into().map_err(|_| Error::Format)?),
             seal,
         })?,
+        (b"manifest-confirm", [scope, ver, hash, signer]) if allowed(scope) => {
+            if *signer != me.as_bytes() {
+                return Err(Error::Format);
+            }
+            confirm_message(
+                std::str::from_utf8(scope).map_err(|_| Error::Format)?,
+                u64::from_be_bytes((*ver).try_into().map_err(|_| Error::Format)?),
+                &(*hash).try_into().map_err(|_| Error::Format)?,
+                &me,
+            )?
+        }
         (b"manifest", _) => {
             let (manifest, signer) = decode_manifest(message)?;
             if signer != me || !allowed(manifest.scope.as_bytes()) {
@@ -508,13 +550,29 @@ pub fn open_manifest(blob: &[u8]) -> Result<AcceptedManifest, Error> {
         return Err(Error::Format);
     }
     let (msg, sig) = blob.split_at(blob.len() - SIGNATURE_LEN);
-    let (manifest, signer) = decode_manifest(msg)?;
+    // since 0.15.1: the signature first, the members' public keys (up to MAX_MEMBERS point decodings) after it
+    let (manifest, signer) = decode_manifest_unchecked(msg)?;
     signer.verify_message(msg, sig)?;
+    check_member_keys(&manifest)?;
     Ok(AcceptedManifest { manifest, signer, hash: Sha256::digest(blob).into(), blob: blob.to_vec() })
 }
 
-/// The list and its signer from a `manifest` message (without the signature); canonical only.
+/// The list and its signer from a `manifest` message (without the signature); canonical only, every
+/// public key checked.
 fn decode_manifest(msg: &[u8]) -> Result<(Manifest, PublicKey), Error> {
+    let (manifest, signer) = decode_manifest_unchecked(msg)?;
+    check_member_keys(&manifest)?;
+    Ok((manifest, signer))
+}
+
+/// Members' signing keys are valid points (the same check as [`PublicKey::from_bytes`]).
+fn check_member_keys(m: &Manifest) -> Result<(), Error> {
+    m.members.iter().try_for_each(|x| PublicKey::from_bytes(x.sign.as_bytes()).map(|_| ()))
+}
+
+/// [`decode_manifest`] with the signer's key checked, but the members' keys **not yet** – they are taken
+/// as bytes; the caller checks them ([`check_member_keys`]) before the list is used.
+fn decode_manifest_unchecked(msg: &[u8]) -> Result<(Manifest, PublicKey), Error> {
     if msg.get(..MAGIC.len()) != Some(&MAGIC[..]) {
         return Err(Error::Format);
     }
@@ -540,7 +598,7 @@ fn decode_manifest(msg: &[u8]) -> Result<(Manifest, PublicKey), Error> {
             [1] => true,
             _ => return Err(Error::Format),
         };
-        let sign = PublicKey::from_bytes(r.field()?)?;
+        let sign = PublicKey(r.fixed()?);
         let seal_version = u64::from_be_bytes(r.fixed()?);
         members.push(Member { id, role, admin, sign, seal: r.field()?.to_vec(), seal_version });
     }
@@ -684,12 +742,72 @@ pub struct ChainOptions {
     /// the anchor requirement is met and versions up to the pinned one are checked only for structure,
     /// signatures and links – not against anchors or admins. Versions above the pin follow the trust rules.
     pub pinned_trusted: bool,
+    /// Since 0.15.1: the **latest** version must be signed by an anchor or by one of `signers`, or confirmed
+    /// by one of them ([`confirm_manifest`], `confirmations`) – an admin who was removed in a version the
+    /// server withholds cannot continue the chain from an older version for someone who restores
+    /// (`Error::UntrustedSigner`). `false` by default (0.15.0 behaviour).
+    pub require_anchor_on_latest: bool,
+    /// Confirmations of the latest version by anchors or `signers` (only with `require_anchor_on_latest`).
+    pub confirmations: Vec<ManifestConfirmation>,
 }
 
 impl Default for ChainOptions {
     fn default() -> Self {
-        ChainOptions { pinned: None, signers: Vec::new(), anchors_may_sign: true, pinned_trusted: false }
+        ChainOptions {
+            pinned: None,
+            signers: Vec::new(),
+            anchors_may_sign: true,
+            pinned_trusted: false,
+            require_anchor_on_latest: false,
+            confirmations: Vec::new(),
+        }
     }
+}
+
+/// An anchor's (or signer's) confirmation of one version of a list (since 0.15.1, [`confirm_manifest`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifestConfirmation {
+    pub signer: PublicKey,
+    pub signature: [u8; SIGNATURE_LEN],
+}
+
+fn confirm_message(scope: &str, version: u64, hash: &[u8; 32], signer: &PublicKey) -> Result<Vec<u8>, Error> {
+    if version > MAX_VERSION {
+        return Err(Error::Format);
+    }
+    Ok(message("manifest-confirm", &[text(scope, MAX_CONTEXT)?, &version.to_be_bytes(), hash, signer.as_bytes()]))
+}
+
+/// An anchor or a signer confirms a version of a list it checked itself (e.g. management after a
+/// coordinator changed the team): with [`ChainOptions::require_anchor_on_latest`], a chain whose latest
+/// version is signed by someone else is accepted only with such a confirmation of exactly that version.
+/// The same bytes as `confirmManifest` in TypeScript (`RGN-SIG1`, kind `manifest-confirm`: scope, version,
+/// list hash, the confirming key).
+pub fn confirm_manifest(key: &SigningKey, list: &AcceptedManifest) -> Result<[u8; SIGNATURE_LEN], Error> {
+    Ok(key.sign_message(&confirm_message(&list.manifest.scope, list.manifest.version, &list.hash, &key.public_key())?))
+}
+
+/// Checks a confirmation made by [`confirm_manifest`] (signature only – not whether the key is trusted).
+pub fn verify_manifest_confirmation(signer: &PublicKey, list: &AcceptedManifest, signature: &[u8]) -> Result<(), Error> {
+    signer.verify_message(&confirm_message(&list.manifest.scope, list.manifest.version, &list.hash, signer)?, signature)
+}
+
+/// The latest version is signed by one of `keys`, or one of them confirmed it (one check per key).
+fn latest_confirmed(latest: &AcceptedManifest, keys: &[&PublicKey], confirmations: &[ManifestConfirmation]) -> bool {
+    if keys.contains(&&latest.signer) {
+        return true;
+    }
+    let mut tried: Vec<&PublicKey> = Vec::new();
+    for c in confirmations {
+        if !keys.contains(&&c.signer) || tried.contains(&&c.signer) {
+            continue;
+        }
+        tried.push(&c.signer);
+        if verify_manifest_confirmation(&c.signer, latest, &c.signature).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Structure of a chain from version 1 (scope, +1, links, epochs, seal versions, canonical blobs, valid
@@ -734,7 +852,8 @@ fn check_pins(out: &[AcceptedManifest], pinned: Option<&Pinned>) -> Result<(), E
 
 /// [`verify_manifest_chain_from_anchor`] with options (since 0.13.2): extra `signers`, anchors that may sign
 /// only for the anchor requirement (`anchors_may_sign = false`), and pins that meet the anchor requirement
-/// (`pinned_trusted`). Every version above version 1 (and above the pin when `pinned_trusted`) must be
+/// (`pinned_trusted`); since 0.15.1 `require_anchor_on_latest` (the latest version signed or confirmed by an
+/// anchor or one of `signers`, `Error::UntrustedSigner`). Every version above version 1 (and above the pin when `pinned_trusted`) must be
 /// signed by an admin of the previous version, by one of `signers` or – when `anchors_may_sign` – by an
 /// anchor (`Error::UntrustedSigner`); structural errors are `Error::BadChain`, withheld pinned versions
 /// `Error::Withheld`.
@@ -770,6 +889,12 @@ pub fn verify_manifest_chain_from_anchor_with(blobs: &[&[u8]], scope: &str, anch
     let pin_meets = opts.pinned.is_some() && opts.pinned_trusted;
     if !pin_meets && !out.iter().any(|a| anchors.contains(&a.signer)) {
         return Err(Error::UntrustedSigner);
+    }
+    if opts.require_anchor_on_latest {
+        let keys: Vec<&PublicKey> = anchors.iter().chain(&opts.signers).collect();
+        if !latest_confirmed(out.last().expect("not empty"), &keys, &opts.confirmations) {
+            return Err(Error::UntrustedSigner);
+        }
     }
     Ok(out)
 }

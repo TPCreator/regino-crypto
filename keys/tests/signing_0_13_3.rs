@@ -29,6 +29,8 @@ fn option_combinations_give_the_same_verdicts_as_typescript() {
             signers: if o.get("signers").is_some() { vec![signer] } else { vec![] },
             anchors_may_sign: o.get("anchors_may_sign").and_then(Value::as_bool).unwrap_or(true),
             pinned_trusted: o.get("pinned_trusted").and_then(Value::as_bool).unwrap_or(false),
+            // 0.15.1 added require_anchor_on_latest and confirmations (off / empty = the verdicts of 0.13.3)
+            ..ChainOptions::default()
         };
         let got = sign::verify_manifest_chain_from_anchor_with(&refs, scope, &[anchor], &opts);
         let case = &t["case"];

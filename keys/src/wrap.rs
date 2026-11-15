@@ -11,7 +11,7 @@
 //! AUDIT.md). The caller must build the context itself unambiguously, e.g. `<app>/client/<id>` with
 //! ids that cannot contain the separator.
 
-use crate::{Error, Key, KEY_LEN};
+use crate::{Error, Key};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::XChaCha20Poly1305;
 use zeroize::Zeroizing;
@@ -66,8 +66,7 @@ pub fn wrap_key(kek: &Key, inner: &Key, context: &[u8]) -> Result<Vec<u8>, Error
 /// Unwraps a key; a wrong key, different context or corruption = error, never a different key.
 pub fn unwrap_key(kek: &Key, blob: &[u8], context: &[u8]) -> Result<Key, Error> {
     let plain = decrypt(WRAP_MAGIC, kek, blob, context)?;
-    let bytes: [u8; KEY_LEN] = plain.as_slice().try_into().map_err(|_| Error::Format)?;
-    Ok(Key::from_bytes(bytes))
+    Key::from_slice(&plain)
 }
 
 /// Seals arbitrary data (e.g. session notes) with the client's key.

@@ -23,7 +23,7 @@
 <h1>Open a backup independently</h1>
 <p lang="sk" class="sk">Slovensky: Otvorte zálohu svojím obnovovacím kódom (12 alebo 24 slov – slovenských alebo anglických –, 16-znakový kód zálohy alebo QR kód). Všetko prebieha len vo vašom prehliadači.</p>
 <p>This file opens an encrypted backup from an app that uses the regino-crypto core, using your recovery code (12 or 24 words – Slovak or English –, a 16-character backup code, or the QR code from the recovery sheet). It runs only in your browser – <b>nothing is sent to the internet</b> (you can open it offline too).</p>
-<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.15.0.</small></p>
+<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.15.1.</small></p>
 <label for="file">Backup file</label>
 <input id="file" type="file" accept=".json,application/json,*/*">
 <label for="words">Recovery code – 12 or 24 words, or a 16-character backup code</label>
@@ -11171,11 +11171,12 @@
   var DEFAULT_BACKUP_CODE_KDF = Object.freeze({ m: 32768, t: 2, p: 1 });
   var MIN_BACKUP_CODE_KDF = Object.freeze({ m: 19456, t: 2, p: 1 });
   var MAX_BACKUP_CODE_KDF = Object.freeze({ m: 131072, t: 8, p: 4, work: 262144 });
-  function validBackupCodeKdf(k) {
+  var MOBILE_BACKUP_CODE_KDF = Object.freeze({ m: 65536, t: 8, p: 4, work: 131072 });
+  function validBackupCodeKdf(k, max = MAX_BACKUP_CODE_KDF) {
     if (!k || typeof k !== "object") return false;
     const { m, t, p } = k;
     const int = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
-    return int(m, MIN_BACKUP_CODE_KDF.m, MAX_BACKUP_CODE_KDF.m) && int(t, MIN_BACKUP_CODE_KDF.t, MAX_BACKUP_CODE_KDF.t) && int(p, MIN_BACKUP_CODE_KDF.p, MAX_BACKUP_CODE_KDF.p) && m * t <= MAX_BACKUP_CODE_KDF.work && // Argon2 needs at least 8 KiB per lane – always true above the minimum, kept for clarity
+    return int(m, MIN_BACKUP_CODE_KDF.m, Math.min(max.m, MAX_BACKUP_CODE_KDF.m)) && int(t, MIN_BACKUP_CODE_KDF.t, Math.min(max.t, MAX_BACKUP_CODE_KDF.t)) && int(p, MIN_BACKUP_CODE_KDF.p, Math.min(max.p, MAX_BACKUP_CODE_KDF.p)) && m * t <= Math.min(max.work, MAX_BACKUP_CODE_KDF.work) && // Argon2 needs at least 8 KiB per lane – always true above the minimum, kept for clarity
     m >= 8 * p;
   }
   var EXP = [];
@@ -11407,7 +11408,7 @@
     const k = kdf;
     return enc4.encode(`${format}|${version}|${createdAt}|${BACKUP_CODE_SECRET}|argon2id m=${k.m} t=${k.t} p=${k.p}|${digest}`);
   }
-  async function decryptBackup(secret, file, app) {
+  async function decryptBackup(secret, file, app, options = {}) {
     const f = file;
     const format = formatOf(app);
     if (!f || f.format !== format || typeof f.ciphertext !== "string" || typeof f.salt !== "string" || typeof f.nonce !== "string" || typeof f.createdAt !== "string")
@@ -11416,13 +11417,13 @@
     if (Number.isInteger(version) && version > BACKUP_VERSION) return { ok: false, error: "newer-version" };
     if (typeof version !== "number" || !BACKUP_VERSIONS.includes(version)) return { ok: false, error: "not-backup" };
     const kdf = version === 3 ? f.kdf : void 0;
-    if (version === 3 && (f.secret !== BACKUP_CODE_SECRET || kdf?.name !== "argon2id" || !validBackupCodeKdf(kdf)))
+    if (version === 3 && (f.secret !== BACKUP_CODE_SECRET || kdf?.name !== "argon2id" || !validBackupCodeKdf(kdf, options.maxKdf)))
       return { ok: false, error: "not-backup" };
     if (version === 3 !== isBackupCodeSecret(secret)) return { ok: false, error: "wrong-key-or-damaged" };
     try {
       const salt = unb64(f.salt);
       if (salt.length !== 16) throw new Error("The salt must have 16 bytes.");
-      const chunksOk = Array.isArray(f.chunks) && f.chunks.every((c) => typeof c === "string");
+      const chunksOk = Array.isArray(f.chunks) && f.chunks.every((c, i, a) => typeof c === "string" && (i === 0 || a[i - 1] < c));
       if (version === 2 && !chunksOk) throw new Error("Missing chunk list.");
       if (version === 3 && f.chunks !== void 0 && !(chunksOk && f.chunks.length)) throw new Error("Invalid chunk list.");
       const key = kdf ? await codeBackupKey(secret, salt, kdf, app) : await backupKey(secret, salt, app);

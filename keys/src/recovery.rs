@@ -8,9 +8,8 @@
 
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::Zeroizing;
 
-use crate::{Error, Key, KEY_LEN};
+use crate::{Error, Key};
 
 /// HKDF context, e.g. `demo recovery-key v1 k128`.
 fn info(app: &str, secret_len: usize) -> Result<String, Error> {
@@ -29,11 +28,7 @@ fn info(app: &str, secret_len: usize) -> Result<String, Error> {
 /// Recovery phrase secret -> key for wrapping (`wrap::wrap_key`).
 pub fn recovery_key(secret: &[u8], app: &str) -> Result<Key, Error> {
     let info = info(app, secret.len())?;
-    let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    Hkdf::<Sha256>::new(None, secret)
-        .expand(info.as_bytes(), out.as_mut())
-        .map_err(|_| Error::Format)?;
-    Ok(Key::from_bytes(*out))
+    Key::fill(|out| Hkdf::<Sha256>::new(None, secret).expand(info.as_bytes(), out).map_err(|_| Error::Format))
 }
 
 #[cfg(test)]

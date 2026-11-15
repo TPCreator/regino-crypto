@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::kdf::{self, KdfParams};
-use crate::{Error, Key, KEY_LEN};
+use crate::{Error, Key};
 
 pub const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// Characters of a code (15 data + 1 check).
@@ -31,17 +31,31 @@ pub const QR_PREFIX: &str = "RGC1:";
 /// Default for new backups and the fixed parameters of the id and chunk keys: 32 MiB, 2 passes, 1 lane.
 pub const DEFAULT_PARAMS: KdfParams = KdfParams { memory_kib: 32768, iterations: 2, parallelism: 1 };
 /// Upper bounds accepted from a backup header: 128 MiB, 8 passes, 4 lanes, `memory × passes` ≤ 256 MiB.
-/// The lower bound is [`KdfParams::MIN`] (19 MiB, 2 passes).
-pub const MAX_PARAMS: KdfParams = KdfParams { memory_kib: 131072, iterations: 8, parallelism: 4 };
-pub const MAX_WORK_KIB: u64 = 262144;
+/// The lower bound is [`KdfParams::MIN`] (19 MiB, 2 passes). Since 0.15.1 the same bounds apply to every
+/// Argon2id of the core ([`KdfParams::MAX`], [`KdfParams::MAX_WORK_KIB`]).
+pub const MAX_PARAMS: KdfParams = KdfParams::MAX;
+pub const MAX_WORK_KIB: u64 = KdfParams::MAX_WORK_KIB;
 
-/// Whether parameters (e.g. from a backup header) are within the bounds – checked before any work.
+/// Whether parameters (e.g. from a backup header) are within the bounds – checked before any work
+/// ([`KdfParams::is_valid`]).
 pub fn valid_params(p: KdfParams) -> bool {
-    let min = KdfParams::MIN;
-    (min.memory_kib..=MAX_PARAMS.memory_kib).contains(&p.memory_kib)
-        && (min.iterations..=MAX_PARAMS.iterations).contains(&p.iterations)
-        && (min.parallelism..=MAX_PARAMS.parallelism).contains(&p.parallelism)
-        && u64::from(p.memory_kib) * u64::from(p.iterations) <= MAX_WORK_KIB
+    p.is_valid()
+}
+
+/// A lower upper bound for reading on a phone (since 0.15.1, the same as `MOBILE_BACKUP_CODE_KDF` in
+/// TypeScript): 64 MiB, 8 passes, 4 lanes, `memory × passes` ≤ 128 MiB – at most 2× the work of
+/// [`DEFAULT_PARAMS`], which it accepts.
+pub const MOBILE_MAX_PARAMS: KdfParams = KdfParams { memory_kib: 65536, iterations: 8, parallelism: 4 };
+pub const MOBILE_MAX_WORK_KIB: u64 = 131072;
+
+/// [`valid_params`] and within [`MOBILE_MAX_PARAMS`] / [`MOBILE_MAX_WORK_KIB`] – check a header with it
+/// before [`backup_key`] on a phone.
+pub fn valid_params_mobile(p: KdfParams) -> bool {
+    p.is_valid()
+        && p.memory_kib <= MOBILE_MAX_PARAMS.memory_kib
+        && p.iterations <= MOBILE_MAX_PARAMS.iterations
+        && p.parallelism <= MOBILE_MAX_PARAMS.parallelism
+        && u64::from(p.memory_kib) * u64::from(p.iterations) <= MOBILE_MAX_WORK_KIB
 }
 
 /// Why an input is not a backup code.
@@ -221,9 +235,7 @@ pub fn stretch(code: &BackupCode, salt: &[u8; 16], params: KdfParams) -> Result<
 }
 
 fn expand(ikm: &Key, info: &str) -> Key {
-    let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    Hkdf::<Sha256>::new(Some(&[]), ikm.as_bytes()).expand(info.as_bytes(), out.as_mut()).expect("32 bytes is a valid HKDF length");
-    Key::from_bytes(*out)
+    Key::fill(|out| Hkdf::<Sha256>::new(Some(&[]), ikm.as_bytes()).expand(info.as_bytes(), out)).expect("32 bytes is a valid HKDF length")
 }
 
 /// Key of a version-3 backup: HKDF-SHA256(Argon2id(code, header salt, header parameters), `<app> backup v3 code16`)

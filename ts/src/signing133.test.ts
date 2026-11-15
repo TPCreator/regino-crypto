@@ -50,5 +50,6 @@ describe('remembered public-key verdicts (0.13.3)', () => {
     }
     expect(isSigningPublicKey(good)).toBe(true);
     expect(SIGNING_KEY_CACHE).toBe(4096);
-  });
+    // 4106 point decodings: ~2 s alone, over 16 s on a busy CI machine (0.15.1, audit N8)
+  }, 60_000);
 });
