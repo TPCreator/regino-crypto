@@ -31,17 +31,15 @@ pub const QR_PREFIX: &str = "RGC1:";
 /// Default for new backups and the fixed parameters of the id and chunk keys: 32 MiB, 2 passes, 1 lane.
 pub const DEFAULT_PARAMS: KdfParams = KdfParams { memory_kib: 32768, iterations: 2, parallelism: 1 };
 /// Upper bounds accepted from a backup header: 128 MiB, 8 passes, 4 lanes, `memory × passes` ≤ 256 MiB.
-/// The lower bound is [`KdfParams::MIN`] (19 MiB, 2 passes).
-pub const MAX_PARAMS: KdfParams = KdfParams { memory_kib: 131072, iterations: 8, parallelism: 4 };
-pub const MAX_WORK_KIB: u64 = 262144;
+/// The lower bound is [`KdfParams::MIN`] (19 MiB, 2 passes). Since 0.15.1 the same bounds apply to every
+/// Argon2id of the core ([`KdfParams::MAX`], [`KdfParams::MAX_WORK_KIB`]).
+pub const MAX_PARAMS: KdfParams = KdfParams::MAX;
+pub const MAX_WORK_KIB: u64 = KdfParams::MAX_WORK_KIB;
 
-/// Whether parameters (e.g. from a backup header) are within the bounds – checked before any work.
+/// Whether parameters (e.g. from a backup header) are within the bounds – checked before any work
+/// ([`KdfParams::is_valid`]).
 pub fn valid_params(p: KdfParams) -> bool {
-    let min = KdfParams::MIN;
-    (min.memory_kib..=MAX_PARAMS.memory_kib).contains(&p.memory_kib)
-        && (min.iterations..=MAX_PARAMS.iterations).contains(&p.iterations)
-        && (min.parallelism..=MAX_PARAMS.parallelism).contains(&p.parallelism)
-        && u64::from(p.memory_kib) * u64::from(p.iterations) <= MAX_WORK_KIB
+    p.is_valid()
 }
 
 /// Why an input is not a backup code.
