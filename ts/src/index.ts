@@ -22,6 +22,8 @@ export {
   type BackupCodeKdf,
 } from './backupCode';
 export * from './backupChunks';
+// key from a password (since 0.16.0): Argon2id as Rust `regino_keys::kdf::derive`
+export * from './kdf';
 export * from './openBackup';
 export * from './pin';
 export * from './recovery';
