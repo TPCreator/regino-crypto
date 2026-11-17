@@ -24,6 +24,7 @@ question. Changes since the first draft of this brief:
 | 0.12.0 | dependencies updated, API/format unchanged: `argon2` 0.5→0.6, `chacha20poly1305` 0.10→0.11, `aes-gcm` 0.10→0.11, `sha2` 0.10→0.11, `hkdf` 0.12→0.13, `hmac` 0.12→0.13 (one `digest` 0.11 / `aead` 0.6 generation, `hybrid-array` instead of `generic-array`), `blahaj` 0.6→0.7 (only `rand` 0.8→0.10 inside; field tables and share layout identical), `getrandom` 0.3→0.4; TypeScript 7 (dev); CI actions. Code: nonces passed as fixed-size arrays, HMAC keys via `KeyInit::new_from_slice` – no change to what is computed. New compatibility test with vectors made by 0.11.1 (wrap, seal, chunks, fingerprint, Argon2id, HKDF keys, Shamir shares) | `keys/Cargo.toml`, `vault/Cargo.toml`, `Cargo.lock`, `keys/src/wrap.rs`, `keys/src/chunks.rs`, `keys/src/backup_chunks.rs`, `keys/tests/compat_0_11_1.rs`, `testvectors/regino/keys-0.11.1.json`, `.github/workflows/` |
 | 0.12.1 | hardening after an external AI review (section 4.3): Shamir shares must have exactly 46 bytes (`SHARE_LEN`); `keystore::rekey` + `finish_rekey` change the database key and the keystore entry through a pending entry, so a crash in between never leaves a key that opens nothing (second review, section 4.4: `Vault::open` reports `WrongKey` only for SQLITE_NOTADB, a file that cannot be read is `Error::Sql`; `finish_rekey` drops the pending entry only after the main key has opened the file and decides nothing without the file; `Error::RekeyIncomplete` after the file was re-encrypted); QR recovery text only in canonical base32 (29 or 55 characters, zero padding bits); backup `version` exactly 1 or 2 (`BACKUP_VERSIONS`); PIN hash: 1 ≤ iterations ≤ 10 000 000 (`MAX_PIN_ITERATIONS`) without leading zeros, salt 16 B and hash 32 B exactly; certificates must have `v: 1`; `verifyWithKeys` states that time is the caller's and takes an optional `at` (`nbf`/`exp`); `peekToken` no longer exported. **No format change** – every fixed vector and `compat_0_11_1` pass untouched | `keys/src/shamir.rs`, `vault/src/lib.rs`, `vault/src/keystore.rs`, `ts/src/recovery.ts`, `ts/src/backup.ts`, `ts/src/pin.ts`, `ts/src/signed.ts`, tests |
 | 0.14.0 | additions only: recovery code in English – a second word list, the unchanged BIP-39 English list (MIT; SHA-256 of `english.txt` checked by a test); `secretToWords` / `wordsToSecret` take a language (default Slovak = behaviour of 0.13.x), `wordsToSecretAuto` recognises the list from the words and refuses a code valid in two lists (`ambiguous`, with both candidates); the language changes only the words – secret, checksum, QR text and keys are the same (question 19); `open-backup.html` opens both | `ts/src/recovery.ts`, `ts/src/wordlist-en.ts`, `ts/src/sheet.ts`, `ts/src/openBackup.ts`, `ts/src/recoveryEn.test.ts`, `keys/tests/recovery_en_0_14_0.rs`, `testvectors/regino/recovery-en-0.14.0.json` |
+| 0.16.0 | additions only: **Shamir key shares in TypeScript** (`splitKey`, `combineShares`, `shareInfo`) in the format of `shamir.rs` – GF(256) mod `0x11d` as `blahaj` 0.7, the same polynomial order and x = 1…n, the same 8-byte fingerprint compared in constant time; multiplication with key bytes without tables or branches; a share as QR text `RGS1:` (share + 2 check bytes, TypeScript only); compatibility checked both ways with fixed vectors (section 4.6); **key from a password in TypeScript** (`passwordKey`, Argon2id as `kdf::derive`, the same bounds, UTF-8 without normalisation, vectors both ways – section 4.7) | `ts/src/shamir.ts`, `ts/src/sheet.ts`, `ts/src/shamir.test.ts`, `keys/tests/shamir_0_16_0.rs`, `testvectors/regino/shamir-0.16.0.json`, `ts/src/kdf.ts`, `ts/src/kdf.test.ts`, `keys/tests/password_key_0_16_0.rs`, `testvectors/regino/password-key-0.16.0.json` |
 | 0.15.1 | fixes after an AI-assisted review of 0.15.0 (section 4.5), **no change of formats** – every vector of 0.15.0 and earlier passes unchanged: Argon2id for a password with the same upper bounds as for a backup code, checked before any work; the signature of a member list checked before the keys of its members; a backup's chunk list only in canonical form; a damaged backup chunk of the same size is rewritten (`put_chunk_verified`); `zeroize` in the AEAD and Argon2id crates and `Key` without copies; `qrcode-generator` pinned exactly; optional lower Argon2id bound for reading on a phone (`MOBILE_BACKUP_CODE_KDF`); two new opt-in checks for apps: the latest list version signed or confirmed by an anchor (`requireAnchorOnLatest`, new statement kind `manifest-confirm`) and only the key of the list's own epoch (`requireCurrentEpoch`) | `keys/src/kdf.rs`, `keys/src/sign.rs`, `keys/src/lib.rs`, `keys/Cargo.toml`, `keys/src/backup_code.rs`, `vault/src/backup_chunks.rs`, `ts/src/signing.ts`, `ts/src/backup.ts`, `ts/src/backupCode.ts`, `ts/package.json`, `testvectors/regino/signing-0.15.1.json` |
 | 0.15.0 | additions only: **16-character backup code** for quick backups of less confidential data – Crockford Base32, 15 data characters (75 bits) + a GF(32) check character (every single wrong character and every swap detected), tolerant reading (case, spaces, dashes, O→0, I/L→1, QR prefix `RGC1:`) with exact errors; keys only through **Argon2id** (`@noble/hashes` 2.4.0 in TS, RustCrypto `argon2` in Rust): backup **version 3** with a random 16-byte salt and the parameters in the header (default 32 MiB, t = 2, p = 1; bounds 19–128 MiB, t 2–8, p 1–4, m·t ≤ 256 MiB checked before any work), then HKDF-SHA256 → AES-256-GCM; id for a server and backup-chunk keys from one Argon2id with a fixed salt of the application; `openBackup` / `open-backup.html` take either kind; versions 1 and 2 and all vectors unchanged (question 20) | `ts/src/backupCode.ts`, `ts/src/backup.ts`, `ts/src/backupChunks.ts`, `ts/src/openBackup.ts`, `ts/src/sheet.ts`, `keys/src/backup_code.rs`, `keys/src/backup_chunks.rs`, `keys/tests/backup_code_0_15_0.rs`, `testvectors/regino/backup-code-0.15.0.json` |
 | 0.13.4 | maintenance, no change of formats: `rusqlite` 0.40→0.42 (`libsqlite3-sys` 0.40, bundled SQLCipher 4.14.0→4.20.0 on SQLite 3.51.3→3.54.1, still vendored OpenSSL) – fixes RUSTSEC-2026-0459 / CVE-2026-119375 (uninitialised page-cache memory with a crafted `-wal` of another page size); databases written by 0.13.3 open unchanged (the apps' upgrade fixtures pass). Backup chunks, from an AI-assisted review (12 Nov 2026): `referenced_chunks` / `gc_chunks` also honour backups copied by hand in the backup folder whose names do not match the pattern (`… - Copy.<ext>`) – their chunks are no longer collected (an unreadable file of that kind is skipped; a damaged backup with a proper name still stops gc); `put_chunk` writes a chunk again when the existing file has another size (truncated or empty file) instead of trusting it forever | `vault/Cargo.toml`, `Cargo.lock`, `vault/src/lib.rs`, `vault/src/backup_chunks.rs` |
@@ -44,7 +45,7 @@ can verify our claims.
 |---|---|---|---|
 | `keys/` (`regino-keys`) | Rust | `kdf.rs`, `backup_code.rs`, `wrap.rs`, `recovery.rs`, `shamir.rs`, `sign.rs`, `lib.rs` | password KDF, key wrapping and sealing, recovery-code key, 2-of-3 key splitting, Ed25519 signatures (signing key, signed wrapped keys, signed member lists) |
 | `vault/` (`regino-vault`) | Rust | `lib.rs`, `keystore.rs`, `backups.rs` | encrypted local SQLite (SQLCipher), DB key in the OS keystore, backup file writing |
-| `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`, `@noble/hashes` for Argon2id since 0.15.0) | `backup.ts`, `backupCode.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts`, `sync.ts`, `inbox.ts`, `signing.ts`, `ecdh.ts` (shared by sync and inbox) | encrypted backups, recovery phrase (12/24 words from the Slovak or, since 0.14.0, the BIP-39 English list; QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates, sync between devices (sealed records, per-device wrapped group key, pairing code), inbox (anonymous senders seal data to a recipient's public key), signatures (the same as `sign.rs`) |
+| `ts/` (`@regino/crypto`) | TypeScript (WebCrypto, `@noble/ed25519`, `@noble/hashes` for Argon2id since 0.15.0) | `backup.ts`, `backupCode.ts`, `recovery.ts`, `openBackup.ts`, `pin.ts`, `sheet.ts`, `signed.ts`, `sync.ts`, `inbox.ts`, `signing.ts`, `ecdh.ts` (shared by sync and inbox), `shamir.ts`, `kdf.ts` (since 0.16.0) | encrypted backups, recovery phrase (12/24 words from the Slovak or, since 0.14.0, the BIP-39 English list; QR), user-switch PIN, printable recovery sheet, verification of signed licence tokens and key certificates, sync between devices (sealed records, per-device wrapped group key, pairing code), inbox (anonymous senders seal data to a recipient's public key), signatures (the same as `sign.rs`), Shamir key shares compatible with `shamir.rs`, key from a password (the same as `kdf.rs`) |
 | `tools/open-backup.html` | built from `ts/tools/` | | public offline tool that opens any backup with the recovery phrase |
 | `docs/PAIRING.md`, `docs/INBOX.md`, `docs/SIGNING.md` | documentation | | how an app must pair a device around `sync.ts` (the public key travels by QR code, not through the server) and how a practice publishes its inbox key and fingerprint around `inbox.ts` – the protocols the auditor should read with the code |
 
@@ -279,7 +280,7 @@ Status: **fixed** (default behaviour changed, with a test), **added** (new opt-i
 
 | Point | Status | Note |
 |---|---|---|
-| N1 – Argon2id for a password had no upper bound (`kdf::KdfParams::check`): a planted key file could start an Argon2id of gigabytes or hours | **fixed** | `KdfParams::MAX` (128 MiB, 8 passes, 4 lanes) and `MAX_WORK_KIB` (m·t ≤ 256 MiB), `KdfParams::is_valid`, checked before any work – the same bounds as `backup_code::valid_params`; the default (64 MiB, 3 passes) and `MIN` are within. No TypeScript equivalent (TS has no password KDF; the PIN is bounded since 0.12.1) |
+| N1 – Argon2id for a password had no upper bound (`kdf::KdfParams::check`): a planted key file could start an Argon2id of gigabytes or hours | **fixed** | `KdfParams::MAX` (128 MiB, 8 passes, 4 lanes) and `MAX_WORK_KIB` (m·t ≤ 256 MiB), `KdfParams::is_valid`, checked before any work – the same bounds as `backup_code::valid_params`; the default (64 MiB, 3 passes) and `MIN` are within. No TypeScript equivalent then (the PIN is bounded since 0.12.1); since 0.16.0 `passwordKey` in TypeScript has the same bounds (section 4.7) |
 | N2 – member list checked before its signature (`openManifest` / `open_manifest`): up to 1000 point decodings for a forged blob | **fixed** | structure, canonical form and the signer's key, then the signature, then the members' keys; same verdicts, only a blob with both a bad signature and a bad member key now reports the signature (`BadSignature`) |
 | N3 – the chunk list of a backup was not required in canonical form (`decryptBackup`): the AAD binds the sorted unique list, so a reordered or doubled list opened and was returned as it was in the file | **fixed** | a list that is not strictly sorted is `wrong-key-or-damaged` before any key derivation; `encryptBackup` has always written the sorted unique list and every existing vector is sorted |
 | N4 – `put_chunk` kept an existing chunk of the right size even when damaged | **fixed** | kept only when its bytes equal the blob; new `put_chunk_verified(dir, name, blob, intact)` keeps an intact file by the app's check (`BackupChunkKeys::open`), so a chunk sealed again with a fresh nonce does not rewrite it |
@@ -290,13 +291,96 @@ Status: **fixed** (default behaviour changed, with a test), **added** (new opt-i
 | S1 – a chain continued by a removed admin: anchor signs v1 (Alice, Bob admins), Alice removes Bob in v2, Bob signs v2′ continuing v1; a member who restores without pins gets `[v1, v2′]` and accepts it | **added** | `requireAnchorOnLatest` / `require_anchor_on_latest`: the latest version must be signed by an anchor or one of `signers`, or confirmed by one of them (`confirmManifest`, new kind `manifest-confirm`: scope, version, hash, key); shared vectors `signing-0.15.1.json`; `docs/SIGNING.md`. Off by default: management has to confirm each version a coordinator signs, which is the app's decision |
 | S2 – a genuine key of an earlier epoch accepted as if current (`openSignedWrap` allows `ver ≤ epoch` on purpose, for new members) | **added** | `openSignedWrap(…, { requireCurrentEpoch: true })` / `verify_wrap_for_with(…, WrapOptions { require_current_epoch: true, .. })` for the key an app seals new items with; older keys (to read older items) are opened without it |
 
+### 4.6 Shamir key shares in TypeScript (0.16.0)
+
+**Why:** apps without Rust (the web, Testurion) need to split an organisation's backup key into shares
+(e.g. 2 of 3: two people of the organisation and a sealed envelope) and put it together again, so that a
+recovery never depends on one person. Until 0.15.1 only Rust (`regino_keys::shamir`) could do it.
+
+**What was added** (`ts/src/shamir.ts`, exported from `@regino/crypto`):
+
+| API | Behaviour |
+|---|---|
+| `splitKey(key: Uint8Array, threshold: number, shares: number): Promise<Uint8Array[]>` | 32-byte key → `shares` shares of 46 bytes; throws for another key length, `threshold < 2`, `shares < threshold`, `shares > 255` or non-integers (Rust `Error::BadSplit`; there both are `u8`). Per key byte `threshold − 1` coefficients from `crypto.getRandomValues` (uniform bytes, zero included, as `blahaj`), wiped with `fill(0)` after use. |
+| `combineShares(shares: readonly Uint8Array[]): Promise<{ ok: true; key: Uint8Array } \| { ok: false; error: ShamirError }>` | The same verdicts as `shamir::combine`, with a more exact error: `format` (wrong length, not `RGK1`, threshold < 2, x = 0), `different-keys` (threshold or fingerprint differ from the first share – Rust `BadShares`), `duplicate-x` (two different shares with one x – Rust `BadShares`), `not-enough-shares` (fewer distinct shares than the threshold – Rust `NotEnoughShares`), `damaged` (the result does not match the fingerprint – Rust `BadShares`). The same share given twice counts once. A refused result is wiped. |
+| `shareInfo(share)` | threshold and number (x) of a share, or `null` – for "share 2 of a 2-of-3 split" in the app. |
+| `shareQrText(share)`, `shareFromQrText(text)`, `shareQrMatrix(share)`, `shareQrSvg(share, quiet?, lang?)` | A share for printing: `RGS1:` + base32 (QR alphanumeric mode) of the share and the first 2 bytes of its SHA-256, 77 characters, canonical padding only; case, spaces and hyphens ignored when typed. **TypeScript only** – Rust works with the share bytes. No word form: a share has 46 bytes, which is no BIP-39 length, and a new word format would need its own checksum design. |
+
+**Format and arithmetic – please verify against `shamir.rs` and `blahaj` 0.7:**
+- share `"RGK1" ‖ threshold(1) ‖ fingerprint(8) ‖ x(1) ‖ y(32)`, fingerprint = SHA-256(`regino-keys/shamir/v1` ‖ key)[0..8]
+  (the buffer with the key copy is wiped after hashing);
+- GF(2^8) with the reduction polynomial `x^8 + x^4 + x^3 + x^2 + 1` (`0x11d`, generator 2) – the field of the `blahaj`
+  log/exp tables; a test compares the multiplication with those tables for all 65 536 pairs;
+- polynomial per key byte `a_{t−1}·x^{t−1} + … + a_1·x + key[i]`, evaluated by Horner from the highest coefficient
+  (the order in which `blahaj::math::random_polynomial` draws them), x = 1, 2, …, `shares` (blahaj's test
+  `evaluator_works`, [3, 2, 5] → 4 at x = 1 and 13 at x = 2, is repeated with a fixed random source);
+- combining: Lagrange interpolation at 0 over **all** distinct shares given (as `blahaj::Sharks::recover`), then
+  the fingerprint, compared with `equalBytes` (no early exit);
+- side channels: the multiplication with key-derived bytes (`gfMul`) has no branches and no table lookups;
+  the inverse (`a^254`) is used only on x, which is public. JavaScript gives no constant-time guarantee
+  (JIT), but nothing here indexes memory or branches on a secret. Rust still uses the `blahaj` tables (question 6).
+- one deliberate difference: TypeScript refuses a share with x = 0 as `format` before any arithmetic; Rust
+  accepts the share bytes and refuses the result by the fingerprint (`BadShares`). No genuine share has x = 0
+  (`split` starts at 1), so no valid set of shares is judged differently.
+
+**Tests and vectors:**
+- `ts/src/shamir.test.ts` – the Rust shares of `testvectors/regino/keys-0.11.1.json` (2 of 3, 3 of 5): every subset of at
+  least the threshold gives the key, every smaller one is `not-enough-shares`; random keys through every subset
+  for 2/2, 2/3, 3/5, 4/6; 255 shares (x up to 255); header and fingerprint computed independently; coefficients
+  drawn from `crypto.getRandomValues` and wiped; every damaged byte of y detected; changed fingerprint, threshold
+  and magic; QR text round trip, typed text, refused texts, a QR code read back with `jsQR`. 100 % coverage.
+- `testvectors/regino/shamir-0.16.0.json` – made by TypeScript: 2 of 3, 3 of 5, 2 of 2, 5 of 7 and 3 of 255
+  (x = 1, 2, 128, 254, 255), 14 refused cases with the TypeScript error and the Rust error each, and fixed
+  QR texts. `keys/tests/shamir_0_16_0.rs` combines every subset in Rust, checks every refused case against
+  `shamir::combine`, and shows that a share of a fresh Rust split of the same key does not fit a TypeScript
+  share (same header, other coefficients → `BadShares`).
+
+### 4.7 Key from a password in TypeScript (0.16.0)
+
+**Why:** apps without Rust (Testurion on the web) wrap an organisation's master key with a key from the
+administrator's password. Testurion computed it itself with `argon2idAsync` from `@noble/hashes`; the core now
+provides it, so every app derives it in one place, with the bounds checked before any work.
+
+**What was added** (`ts/src/kdf.ts`, exported from `@regino/crypto`):
+
+| API | Behaviour |
+|---|---|
+| `passwordKey(password: string \| Uint8Array, salt: Uint8Array, kdf?: PasswordKdf): Promise<Uint8Array>` | Argon2id v0x13, output 32 B – `regino_keys::kdf::derive(password, salt, params)`. Throws before any work for parameters out of bounds (a copy of `m`, `t`, `p` is checked and used), a salt that is not a 16-byte `Uint8Array`, a password that is neither a string nor a `Uint8Array`, a string with a lone surrogate. |
+| `DEFAULT_PASSWORD_KDF` = `{ m: 65536, t: 3, p: 1 }` | `KdfParams::default()` |
+| `MIN_PASSWORD_KDF` = `{ m: 19456, t: 2, p: 1 }`, `MAX_PASSWORD_KDF` = `{ m: 131072, t: 8, p: 4, work: 262144 }`, `validPasswordKdf(k)` | `KdfParams::MIN`, `KdfParams::MAX`, `MAX_WORK_KIB`, `KdfParams::is_valid` – the same objects as `MIN_BACKUP_CODE_KDF` / `MAX_BACKUP_CODE_KDF` |
+| `newPasswordSalt()`, `PASSWORD_SALT_BYTES` = 16, `PASSWORD_KEY_BYTES` = 32 | `kdf::new_salt()`, `KEY_LEN` |
+
+**Please verify:**
+- **No Unicode normalisation**, on purpose and as in Rust (`derive` takes bytes): a string is encoded with
+  `TextEncoder` (UTF-8) as given. "á" as one code point (NFC) and as "a" + combining accent (NFD) are different
+  passwords (vector). Keyboards on one system type NFC, but a password typed on macOS/iOS and on Windows can
+  differ; an app that wants them equal must normalise before calling, from its first release (changing it
+  later makes old passwords fail). Testurion encodes without normalisation too, so its stored wraps stay valid.
+- A string with a **lone surrogate** is refused: `TextEncoder` would map it to U+FFFD (two passwords → one key)
+  and a Rust `&str` cannot hold it. Pairs (emoji) are fine (vector).
+- An **empty password** is accepted, as in Rust; the minimum length is the app's rule (Testurion: 10 characters).
+- The UTF-8 copy of the password is wiped with `fill(0)` after Argon2id; bytes given by the caller and the
+  returned key are the caller's to wipe. `@noble/hashes` wipes its own buffers (best effort in JavaScript).
+
+**Tests and vectors:**
+- `ts/src/kdf.test.ts` – the Rust keys of `testvectors/regino/keys-0.11.1.json` (19 MiB/2 and 64 MiB/3) from
+  bytes and from the string; all vectors of `password-key-0.16.0.json`; NFC ≠ NFD; empty password; refused
+  parameters; bad salts and passwords; lone surrogates; a getter cannot change the parameters after the check;
+  the UTF-8 copy is wiped and the caller's bytes are not; the exact call of Testurion
+  (`argon2idAsync(TextEncoder(password), salt, { m: 65536, t: 3, p: 1, dkLen: 32, version: 0x13 })`) gives the
+  same key. 100 % coverage.
+- `testvectors/regino/password-key-0.16.0.json` – made by TypeScript: ASCII at the minimum, Slovak letters in
+  NFC and NFD, an empty password, an emoji with 32 MiB / 4 passes / 2 lanes, the default 64 MiB / 3 / 1 and the
+  upper bound of work 128 MiB / 2 / 4; 7 refused parameter sets. `keys/tests/password_key_0_16_0.rs` derives
+  every key with `kdf::derive` and refuses every refused set with `Error::KdfParams`.
+
 ## 5. Existing assurance
 
 - Tests on every change: `cargo test --workspace`, `cd ts && npx vitest run --coverage` (100 % line, branch and function coverage enforced for the TypeScript part; Rust coverage is not measured yet).
 - Fixed cross-language vectors (Rust ↔ TS) for the recovery key and, since 0.13.0, for signatures (`testvectors/regino/signing-0.13.0.json`: keys, derived keys, fingerprints, data and wrap signatures, a manifest chain with refused and malformed lists, torsion edge cases); snapshot of the Slovak word list; SHA-256 of the English list equal to the BIP-39 `english.txt`, BIP-39 test vectors and shared vectors for English codes (`testvectors/regino/recovery-en-0.14.0.json`, since 0.14.0). Since 0.15.0 the backup code (`testvectors/regino/backup-code-0.15.0.json`): accepted spellings and refused inputs with their exact errors, Argon2id outputs, backup keys, ids, a whole backup and a chunk made by TypeScript and opened by Rust (`keys/tests/backup_code_0_15_0.rs`); the RFC 9106 Argon2id vector for both libraries.
 - **Wycheproof** vectors (`testvectors/wycheproof/`): XChaCha20-Poly1305, AES-256-GCM (96-bit IV), HKDF-SHA256, Ed25519, ECDH P-256 with raw points (incl. invalid-curve and wrong-curve attacks) – valid inputs accepted, invalid rejected.
 - The fixed vectors in `testvectors/regino/` (`ecdh-0.6.0.json`, `sync-0.8.0.json`) contain private keys **on purpose**: they are test keys generated only for these vectors (to show that messages and wrapped keys made by older versions still open), never used anywhere else – not a leak.
-- Fixed vectors made by 0.11.1 with the previous dependency generation (`testvectors/regino/keys-0.11.1.json`, `keys/tests/compat_0_11_1.rs`): wrapped key, sealed data, chunks, fingerprint, Argon2id and HKDF keys, Shamir shares – a dependency update must open them unchanged.
+- Fixed vectors made by 0.11.1 with the previous dependency generation (`testvectors/regino/keys-0.11.1.json`, `keys/tests/compat_0_11_1.rs`): wrapped key, sealed data, chunks, fingerprint, Argon2id and HKDF keys, Shamir shares – a dependency update must open them unchanged. Since 0.16.0 the TypeScript side combines the same Shamir shares, and Rust combines the shares of `testvectors/regino/shamir-0.16.0.json` made by TypeScript.
 - Fixed format vectors that must keep opening in future versions: a backup made by 0.1.0, an inbox message and a v1 wrapped group key made by 0.6.0, a v2 wrapped group key, a pairing code and a SAS made by 0.8.0 (`testvectors/regino/`).
 - **cargo-deny** (`deny.toml`): RustSec advisories, yanked crates, license allow-list, crates.io only. **npm audit** for `ts/`.
 - CI actions pinned to commit hashes, read-only token, `npm ci` and `cargo --locked` against the committed lockfiles. Releases attach CycloneDX SBOMs and SHA-256 checksums; the release build runs with a read-only token and only the upload step has write access.

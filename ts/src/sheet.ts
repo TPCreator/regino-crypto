@@ -1,6 +1,7 @@
 import qrcode from 'qrcode-generator';
 import { backupCodeQrText, formatBackupCode, isBackupCodeSecret } from './backupCode';
 import { DEFAULT_LANGUAGE, recoveryQrText, secretToWords, type RecoveryLanguage } from './recovery';
+import { shareQrText } from './shamir';
 
 /**
  * Printable recovery sheet: numbered words + a QR code with the same code. For a 16-character backup
@@ -24,6 +25,7 @@ Do not photograph it or store it in the cloud, in e-mail or on your phone.`,
     howTo: `To recover, enter the words in order (the first 4 letters are enough, diacritics do not matter) or scan the QR code.
 The QR code contains only this code – no address, it opens nothing on the internet.`,
     codeQrLabel: 'QR code of the backup code',
+    shareQrLabel: 'QR code of a key share',
     codeTitle: 'backup code',
     chars: 'characters',
     codeHowTo: `To restore, enter the 16 characters (hyphens, spaces and lower case do not matter; O = 0, I and L = 1) or scan the QR code.
@@ -41,6 +43,7 @@ Nefoťte ho a neukladajte do cloudu, e-mailu ani do mobilu.`,
     howTo: `Pri obnove zadajte slová v poradí (stačia prvé 4 písmená, diakritika nevadí) alebo naskenujte QR kód.
 QR kód obsahuje len tento kód – žiadnu adresu, nič sa ním neotvára na internete.`,
     codeQrLabel: 'QR kód kódu zálohy',
+    shareQrLabel: 'QR kód podielu kľúča',
     codeTitle: 'kód zálohy',
     chars: 'znakov',
     codeHowTo: `Pri obnove zadajte 16 znakov (pomlčky, medzery a malé písmená nevadia; O = 0, I a L = 1) alebo naskenujte QR kód.
@@ -53,16 +56,18 @@ QR kód obsahuje len tento kód – žiadnu adresu, nič sa ním neotvára na in
  * Words (16/32 B) give `RGR1:…`, a backup code (10 B) gives `RGC1:…`.
  */
 export async function recoveryQrMatrix(secret: Uint8Array): Promise<boolean[][]> {
+  return qrMatrix(isBackupCodeSecret(secret) ? backupCodeQrText(secret) : await recoveryQrText(secret));
+}
+
+function qrMatrix(text: string): boolean[][] {
   const qr = qrcode(0, 'M');
-  qr.addData(isBackupCodeSecret(secret) ? backupCodeQrText(secret) : await recoveryQrText(secret), 'Alphanumeric');
+  qr.addData(text, 'Alphanumeric');
   qr.make();
   const n = qr.getModuleCount();
   return Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => qr.isDark(r, c)));
 }
 
-/** QR code as a standalone SVG (no links, no text). `lang` sets the accessible label (default English). */
-export async function recoveryQrSvg(secret: Uint8Array, quiet = 4, lang: SheetLang = 'en'): Promise<string> {
-  const m = await recoveryQrMatrix(secret);
+function qrSvg(m: boolean[][], quiet: number, label: string): string {
   const size = m.length + 2 * quiet;
   let d = '';
   m.forEach((row, r) =>
@@ -71,9 +76,28 @@ export async function recoveryQrSvg(secret: Uint8Array, quiet = 4, lang: SheetLa
     }),
   );
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" role="img" aria-label="${isBackupCodeSecret(secret) ? TEXT[lang].codeQrLabel : TEXT[lang].qrLabel}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" role="img" aria-label="${label}">` +
     `<rect width="${size}" height="${size}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`
   );
+}
+
+/** QR code as a standalone SVG (no links, no text). `lang` sets the accessible label (default English). */
+export async function recoveryQrSvg(secret: Uint8Array, quiet = 4, lang: SheetLang = 'en'): Promise<string> {
+  const label = isBackupCodeSecret(secret) ? TEXT[lang].codeQrLabel : TEXT[lang].qrLabel;
+  return qrSvg(await recoveryQrMatrix(secret), quiet, label);
+}
+
+/**
+ * QR code of one Shamir key share (since 0.16.0): the text `RGS1:…` of `shareQrText` (share + 2 check
+ * bytes), error correction "M". For a printed share sheet next to the share's number (`shareInfo`).
+ */
+export async function shareQrMatrix(share: Uint8Array): Promise<boolean[][]> {
+  return qrMatrix(await shareQrText(share));
+}
+
+/** QR code of a key share as a standalone SVG (no links, no text). */
+export async function shareQrSvg(share: Uint8Array, quiet = 4, lang: SheetLang = 'en'): Promise<string> {
+  return qrSvg(await shareQrMatrix(share), quiet, TEXT[lang].shareQrLabel);
 }
 
 export interface SheetOptions {
