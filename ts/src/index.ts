@@ -27,6 +27,17 @@ export * from './pin';
 export * from './recovery';
 export * from './wordlist-sk';
 export * from './sheet';
+// Shamir key shares (since 0.16.0): the public API only (the field arithmetic stays internal)
+export {
+  SHAMIR_SHARE_LENGTH,
+  SHARE_QR_PREFIX,
+  combineShares,
+  shareFromQrText,
+  shareInfo,
+  shareQrText,
+  splitKey,
+  type ShamirError,
+} from './shamir';
 export * from './signed';
 export * from './sync';
 export * from './inbox';

@@ -1,0 +1,248 @@
+{
+  "version": "0.16.0",
+  "note": "Shamir key shares made by the TypeScript side (ts/src/shamir.ts); combined by Rust in keys/tests/shamir_0_16_0.rs. Share = \"RGK1\" | threshold | fingerprint(8) | x | y(32). The keys are test values only.",
+  "split": [
+    {
+      "name": "2 of 3",
+      "key": "6666666666666666666666666666666666666666666666666666666666666666",
+      "threshold": 2,
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2",
+        "52474b310231b0dacda5adf45503e4a6ec0d78d1c41a4ab127ea2daa18c19a0d216595c18806b1c1925105deb0a0"
+      ]
+    },
+    {
+      "name": "3 of 5",
+      "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "threshold": 3,
+      "shares": [
+        "52474b3103cd1981edcc21316b0190eb16dcf285837bac8b70610f1cbfae7503c72d4e1c6c9bcef443b62a1b9072",
+        "52474b3103cd1981edcc21316b0249b27f6d9aaf72a9a1e2f3e5a2081cc47185ade2c67d1057eabd19243a72712b",
+        "52474b3103cd1981edcc21316b03d9586bb26c2ff7d50560898fa119ad65149778dc9c746adb3c5040890c74ff46",
+        "52474b3103cd1981edcc21316b045f8fb1cc84aa7f03902dd122d79b83ee44de51e22830f59ef0dde298655265e8",
+        "52474b3103cd1981edcc21316b05cf65a513722afa7f34afab48d48a324f21cc84dc72398f122630bb355354eb85"
+      ]
+    },
+    {
+      "name": "2 of 2",
+      "key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "threshold": 2,
+      "shares": [
+        "52474b31029cc0ffb16392e2d101d673988491afe9675b1a9afd9c5d9a44083cfd45d7fc7f1327c109e04c1ea2c2",
+        "52474b31029cc0ffb16392e2d102adfa3109235fd3d2aa2835fb39a635940c64fb96aff9e23a52830ec184204585"
+      ]
+    },
+    {
+      "name": "5 of 7",
+      "key": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+      "threshold": 5,
+      "shares": [
+        "52474b310535da624a4ca21fff014929525c743ee604ff01313c8a2084b2301517f5c6b1c9c8b305ee3a0f31e8f2",
+        "52474b310535da624a4ca21fff0238817cfe61857d1e28d18d829a028eebc75fba25a001ca8c205adc58914cda6e",
+        "52474b310535da624a4ca21fff03902d4871901feef5fea5f4521da0ba361e88efc72c0de1ae0a92cc54c37025c7",
+        "52474b310535da624a4ca21fff04561a728c325ba2ab5cbd276e437f41dd6200e55ba03732b614026a220599c214",
+        "52474b310535da624a4ca21fff05244a204e24c632a52ae7ca7684102f7a29935ae2ec03a81ad99bbbaaca92453b",
+        "52474b310535da624a4ca21fff06fc07c276e273af68a06b434514b591d7e7513e8417c3d45f996616dd738187b6",
+        "52474b310535da624a4ca21fff07cf7354c4d5efec2e57ed4c1a72f5e1b0f5b17199a5ff1aae758b83d85d3aa97d"
+      ]
+    },
+    {
+      "name": "3 of 255 (x = 1, 2, 128, 254, 255)",
+      "key": "01101f2e3d4c5b6a798897a6b5c4d3e2f1000f1e2d3c4b5a69788796a5b4c3d2",
+      "threshold": 3,
+      "shares": [
+        "52474b3103a89df1c3b51a7f24012d6946f043ae28fedd10013b751e1582514b408d3a8863e0fc0b46261d543054",
+        "52474b3103a89df1c3b51a7f2402ac82f18f0633fd4a0eff19f8d0876e4ac524bc638f7d860de1b371d6c8d37592",
+        "52474b3103a89df1c3b51a7f2480ad8396017ec9e250af864a9683ad18b485e2956d483ec1a3298939c1e7b8e479",
+        "52474b3103a89df1c3b51a7f24fe391c777b2ddfa5c94990b8af655ef4c4cfd41cd876124dce59fa80c009a46ea0",
+        "52474b3103a89df1c3b51a7f24ff15652ea5533dd65ded082e32a58432a46f9f534b61a66574cc894170b1449d26"
+      ]
+    }
+  ],
+  "refused": [
+    {
+      "name": "no share",
+      "shares": [],
+      "ts": {
+        "code": "not-enough-shares",
+        "threshold": 2,
+        "count": 0
+      },
+      "rust": "NotEnoughShares(2)"
+    },
+    {
+      "name": "one share of 2 of 3",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24"
+      ],
+      "ts": {
+        "code": "not-enough-shares",
+        "threshold": 2,
+        "count": 1
+      },
+      "rust": "NotEnoughShares(2)"
+    },
+    {
+      "name": "the same share twice",
+      "shares": [
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2",
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2"
+      ],
+      "ts": {
+        "code": "not-enough-shares",
+        "threshold": 2,
+        "count": 1
+      },
+      "rust": "NotEnoughShares(2)"
+    },
+    {
+      "name": "two shares of 3 of 5",
+      "shares": [
+        "52474b3103cd1981edcc21316b0190eb16dcf285837bac8b70610f1cbfae7503c72d4e1c6c9bcef443b62a1b9072",
+        "52474b3103cd1981edcc21316b05cf65a513722afa7f34afab48d48a324f21cc84dc72398f122630bb355354eb85"
+      ],
+      "ts": {
+        "code": "not-enough-shares",
+        "threshold": 3,
+        "count": 2
+      },
+      "rust": "NotEnoughShares(3)"
+    },
+    {
+      "name": "shares of two different keys",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b31029cc0ffb16392e2d102adfa3109235fd3d2aa2835fb39a635940c64fb96aff9e23a52830ec184204585"
+      ],
+      "ts": {
+        "code": "different-keys",
+        "index": 1
+      },
+      "rust": "BadShares"
+    },
+    {
+      "name": "shares with different thresholds",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b3103cd1981edcc21316b0249b27f6d9aaf72a9a1e2f3e5a2081cc47185ade2c67d1057eabd19243a72712b",
+        "52474b3103cd1981edcc21316b03d9586bb26c2ff7d50560898fa119ad65149778dc9c746adb3c5040890c74ff46"
+      ],
+      "ts": {
+        "code": "different-keys",
+        "index": 1
+      },
+      "rust": "BadShares"
+    },
+    {
+      "name": "damaged y byte",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cfdf1c64c457d226fc5735b724b609e2"
+      ],
+      "ts": {
+        "code": "damaged"
+      },
+      "rust": "BadShares"
+    },
+    {
+      "name": "damaged y byte with a third share",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2",
+        "52474b310231b0dacda5adf45503e4a6ec0d78d1c41a4ab127ea2daa18c19a0d216595c18806b1c1925105deb020"
+      ],
+      "ts": {
+        "code": "damaged"
+      },
+      "rust": "BadShares"
+    },
+    {
+      "name": "two different shares with the same x",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310231b0dacda5adf455011826ebb46c0bf2b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2"
+      ],
+      "ts": {
+        "code": "duplicate-x",
+        "index": 1
+      },
+      "rust": "BadShares"
+    },
+    {
+      "name": "x = 0",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310231b0dacda5adf455009ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2"
+      ],
+      "ts": {
+        "code": "format",
+        "index": 1
+      },
+      "rust": "BadShares"
+    },
+    {
+      "name": "first share too short",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf",
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2"
+      ],
+      "ts": {
+        "code": "format",
+        "index": 0
+      },
+      "rust": "Format"
+    },
+    {
+      "name": "second share too long",
+      "shares": [
+        "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e200"
+      ],
+      "ts": {
+        "code": "format",
+        "index": 1
+      },
+      "rust": "BadShares"
+    },
+    {
+      "name": "wrong magic",
+      "shares": [
+        "52474b320231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2"
+      ],
+      "ts": {
+        "code": "format",
+        "index": 0
+      },
+      "rust": "Format"
+    },
+    {
+      "name": "threshold 1",
+      "shares": [
+        "52474b310131b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+        "52474b310131b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2"
+      ],
+      "ts": {
+        "code": "format",
+        "index": 0
+      },
+      "rust": "Format"
+    }
+  ],
+  "qr": [
+    {
+      "share": "52474b310231b0dacda5adf455011826ebb46c0bf3b9892b59e95f224cf032b45b6737f03c462bf0c180470edf24",
+      "text": "RGS1:KJDUWMICGGYNVTNFVX2FKAIYE3V3I3AL6O4YSK2Z5FPSETHQGK2FWZZX6A6EMK7QYGAEODW7ETZUQ"
+    },
+    {
+      "share": "52474b310231b0dacda5adf455029ae661df72bc51c5a5fc186514ee3257cedf1c64c457d226fc5735b724b609e2",
+      "text": "RGS1:KJDUWMICGGYNVTNFVX2FKAU24ZQ564V4KHC2L7AYMUKO4MSXZ3PRYZGEK7JCN7CXGW3SJNQJ4KSME"
+    },
+    {
+      "share": "52474b310231b0dacda5adf45503e4a6ec0d78d1c41a4ab127ea2daa18c19a0d216595c18806b1c1925105deb0a0",
+      "text": "RGS1:KJDUWMICGGYNVTNFVX2FKA7EU3WA26GRYQNEVMJH5IW2UGGBTIGSCZMVYGEANMOBSJIQLXVQUA2LO"
+    }
+  ]
+}
