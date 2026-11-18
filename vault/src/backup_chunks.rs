@@ -95,21 +95,34 @@ pub fn referenced_chunks(backup_dir: &Path, prefix: &str, ext: &str) -> Result<H
         add(&v);
     }
     // Copies the user made by hand in the same folder (`… - Copy.<ext>`, `… (1).<ext>`) do not match the strict
-    // name pattern, but their chunks must stay too (0.13.4). They are not ours to fail on: one that cannot be
-    // read or parsed is skipped.
-    if let Ok(entries) = fs::read_dir(backup_dir) {
-        let suffix = format!(".{ext}");
-        for e in entries.flatten() {
-            let p = e.path();
-            if listed.contains(&p) || !p.is_file() || !e.file_name().to_str().is_some_and(|n| n.ends_with(&suffix)) {
-                continue;
-            }
-            if let Some(v) = fs::read(&p).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
-                add(&v);
-            }
+    // name pattern, but their chunks must stay too (0.13.4). A copy that can be read but is not a JSON backup is
+    // not ours and is skipped; a copy that cannot be read (locked by an antivirus or a sync client, no access)
+    // stops the collection like an unreadable backup (since 0.16.0) – otherwise its chunks would be deleted.
+    if !backup_dir.exists() {
+        return Ok(set);
+    }
+    let suffix = format!(".{ext}");
+    for e in fs::read_dir(backup_dir)? {
+        let e = e?;
+        let p = e.path();
+        if listed.contains(&p) || !p.is_file() || !e.file_name().to_str().is_some_and(|n| n.ends_with(&suffix)) {
+            continue;
+        }
+        if let Some(v) = hand_copy(fs::read(&p))? {
+            add(&v);
         }
     }
     Ok(set)
+}
+
+/// A hand-made copy of a backup: its JSON, `None` when it is gone (deleted meanwhile) or not JSON, an error
+/// when it exists but cannot be read.
+fn hand_copy(read: std::io::Result<Vec<u8>>) -> Result<Option<serde_json::Value>, BackupError> {
+    match read {
+        Ok(b) => Ok(serde_json::from_slice(&b).ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(BackupError::Io(e)),
+    }
 }
 
 /// Deletes chunks that no backup lists and stale temporary files, older than `min_age`; returns how many.
@@ -234,6 +247,37 @@ mod tests {
         assert!(put_chunk_verified(&kd, &name(1), b"sealed again", |old| old == b"sealed chunk").unwrap());
         assert_eq!(read_chunk(&kd, &name(1)).unwrap(), b"sealed again");
         assert!(put_chunk_verified(&kd, &name(2), b"new", |_| true).unwrap());
+    }
+
+    /// 0.16.0 (review 2026-11-18, F-04): a hand-made copy that exists but cannot be read stops the collection,
+    /// so its chunks are not deleted; one that is gone or not JSON is skipped.
+    #[test]
+    fn unreadable_hand_copy_stops_gc() {
+        use std::io::{Error as IoError, ErrorKind};
+        assert!(matches!(hand_copy(Err(IoError::from(ErrorKind::PermissionDenied))), Err(BackupError::Io(_))));
+        assert!(matches!(hand_copy(Err(IoError::other("sharing violation"))), Err(BackupError::Io(_))));
+        assert!(hand_copy(Err(IoError::from(ErrorKind::NotFound))).unwrap().is_none());
+        assert!(hand_copy(Ok(b"not json".to_vec())).unwrap().is_none());
+        assert_eq!(hand_copy(Ok(manifest(&[name(2)]))).unwrap().unwrap()["chunks"][0], name(2));
+        // a real unreadable file (Unix permissions; a root user can read it anyway, then the check is skipped)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let root = tempfile::tempdir().unwrap();
+            let (dir, kd) = (root.path(), root.path().join("kusky"));
+            put_chunk(&kd, &name(1), b"one").unwrap();
+            put_chunk(&kd, &name(2), b"two").unwrap();
+            write_backup(dir, "demo-", "demo", "demo-2026-10-02.demo", &manifest(&[name(1)]), 30).unwrap();
+            let copy = dir.join("demo-2026-09-01 (1).demo");
+            fs::write(&copy, manifest(&[name(2)])).unwrap();
+            fs::set_permissions(&copy, fs::Permissions::from_mode(0o000)).unwrap();
+            if fs::read(&copy).is_err() {
+                assert!(gc_chunks(&kd, dir, "demo-", "demo", Duration::ZERO).is_err());
+                assert!(has_chunk(&kd, &name(2)).unwrap());
+            }
+            fs::set_permissions(&copy, fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(gc_chunks(&kd, dir, "demo-", "demo", Duration::ZERO).unwrap(), 0);
+        }
     }
 
     #[test]
