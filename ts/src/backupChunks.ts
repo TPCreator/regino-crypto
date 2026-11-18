@@ -60,7 +60,11 @@ export async function backupChunkName(keys: BackupChunkKeys, plain: Uint8Array):
   return hex(new Uint8Array(await crypto.subtle.sign('HMAC', keys.name, plain as BufferSource)));
 }
 
-/** Seals a chunk; returns its name and the file contents. */
+/**
+ * Seals a chunk; returns its name and the file contents.
+ * Limit (AES-256-GCM with a random 96-bit nonce under the fixed chunk key): at most 2^32 sealed chunks per
+ * recovery code or backup code (NIST SP 800-38D), far above the expected use (the same content is sealed once).
+ */
 export async function sealBackupChunk(keys: BackupChunkKeys, plain: Uint8Array): Promise<{ name: string; blob: Uint8Array }> {
   const name = await backupChunkName(keys, plain);
   const nonce = crypto.getRandomValues(new Uint8Array(12));

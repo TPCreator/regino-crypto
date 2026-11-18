@@ -9,7 +9,7 @@ fn key(n: u8) -> SigningKey {
 }
 
 fn member(id: &str, admin: bool, k: &SigningKey) -> Member {
-    Member { id: id.into(), role: "member".into(), admin, sign: k.public_key(), seal: vec![4; 65], seal_version: 1 }
+    Member { id: id.into(), role: "member".into(), admin, sign: k.public_key(), seal: [&[4u8][..], k.public_key().as_bytes()].concat(), seal_version: 1 }
 }
 
 fn replace(blob: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {

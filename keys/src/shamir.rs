@@ -25,7 +25,14 @@ fn fingerprint(key: &Key) -> [u8; 8] {
 }
 
 /// Splits the key. Result: `shares` shares as bytes (convert them to words or QR codes for printing).
+/// [`split_zeroizing`] gives the same shares in buffers that are wiped when dropped.
 pub fn split(key: &Key, threshold: u8, shares: u8) -> Result<Vec<Vec<u8>>, Error> {
+    Ok(split_zeroizing(key, threshold, shares)?.iter().map(|s| s.to_vec()).collect())
+}
+
+/// Since 0.16.0 (review 2026-11-18, F-06): [`split`] with every share in a [`Zeroizing`] buffer, so the shares
+/// are wiped from memory when the app drops them (e.g. after printing). Same shares, same format.
+pub fn split_zeroizing(key: &Key, threshold: u8, shares: u8) -> Result<Vec<Zeroizing<Vec<u8>>>, Error> {
     if threshold < 2 || shares < threshold {
         return Err(Error::BadSplit { threshold, shares });
     }
@@ -34,10 +41,12 @@ pub fn split(key: &Key, threshold: u8, shares: u8) -> Result<Vec<Vec<u8>>, Error
     Ok(dealer
         .take(shares as usize)
         .map(|s| {
-            let mut out = MAGIC.to_vec();
+            let body = Zeroizing::new(Vec::from(&s));
+            let mut out = Zeroizing::new(Vec::with_capacity(SHARE_LEN));
+            out.extend_from_slice(MAGIC);
             out.push(threshold);
             out.extend_from_slice(&fp);
-            out.extend_from_slice(&Vec::from(&s));
+            out.extend_from_slice(&body);
             debug_assert_eq!(out.len(), SHARE_LEN);
             out
         })
@@ -48,7 +57,17 @@ pub fn split(key: &Key, threshold: u8, shares: u8) -> Result<Vec<Vec<u8>>, Error
 /// A share of any other length than [`SHARE_LEN`] is refused (`Error::Format` for the first one,
 /// `Error::BadShares` for the others), so trailing or missing bytes never reach the field arithmetic.
 pub fn combine(parts: &[Vec<u8>]) -> Result<Key, Error> {
-    let first = parts.first().ok_or(Error::NotEnoughShares(2))?;
+    combine_any(parts)
+}
+
+/// Since 0.16.0: [`combine`] for shares kept in [`Zeroizing`] buffers (from [`split_zeroizing`] or read by the
+/// app into such buffers).
+pub fn combine_zeroizing(parts: &[Zeroizing<Vec<u8>>]) -> Result<Key, Error> {
+    combine_any(parts)
+}
+
+fn combine_any<P: AsRef<[u8]>>(parts: &[P]) -> Result<Key, Error> {
+    let first = parts.first().ok_or(Error::NotEnoughShares(2))?.as_ref();
     if first.len() != SHARE_LEN || &first[..4] != MAGIC {
         return Err(Error::Format);
     }
@@ -63,6 +82,7 @@ pub fn combine(parts: &[Vec<u8>]) -> Result<Key, Error> {
     let mut seen: std::collections::BTreeMap<u8, &[u8]> = std::collections::BTreeMap::new();
     let mut shares = Vec::new();
     for p in parts {
+        let p = p.as_ref();
         if p.len() != SHARE_LEN || &p[..4] != MAGIC || p[4] != threshold || p[5..HEADER_LEN] != fp {
             return Err(Error::BadShares);
         }

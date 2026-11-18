@@ -37,9 +37,21 @@ fn keys_blobs_and_confirmations() {
     for name in ["v1", "v2", "f2"] {
         let a = list(&v, name);
         assert_eq!(a.hash.to_vec(), hex(&v["hashes"][name]), "{name}");
-        // Ed25519 is deterministic: Rust signs the same list to the same blob
+        // Ed25519 is deterministic: Rust signs the same message to the same blob
         let signer = ["anchor", "alice", "bob"].into_iter().find(|n| key(&v, n).public_key() == a.signer).unwrap();
-        assert_eq!(sign::sign_manifest(&key(&v, signer), &a.manifest).unwrap(), hex(&v["blobs"][name]), "{name}");
+        let blob = hex(&v["blobs"][name]);
+        let msg = &blob[..blob.len() - sign::SIGNATURE_LEN];
+        assert_eq!(sign::sign_prepared(&key(&v, signer), msg, None).unwrap().to_vec(), blob[msg.len()..].to_vec(), "{name}");
+        // v1 and f2 of the fixture give alice and bob one seal: read as before, but since 0.16.0 such a list is
+        // not made again (F-07); v2 has one member and is signed to the same blob
+        let shared = a.manifest.members.len() > 1 && a.manifest.members.iter().all(|m| m.seal == a.manifest.members[0].seal);
+        assert_eq!(shared, name != "v2", "{name}");
+        let made = sign::sign_manifest(&key(&v, signer), &a.manifest);
+        if shared {
+            assert_eq!(made, Err(Error::Format), "{name}");
+        } else {
+            assert_eq!(made.unwrap(), blob, "{name}");
+        }
     }
     for c in v["confirmations"].as_array().unwrap() {
         let (k, l) = (key(&v, c["signer"].as_str().unwrap()), list(&v, c["list"].as_str().unwrap()));

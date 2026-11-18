@@ -22,7 +22,7 @@
 import { Point, getPublicKeyAsync, signAsync, verifyAsync } from "@noble/ed25519";
 import { equalBytes } from "./bytes";
 import { b64, checkContext, unb64 } from "./ecdh";
-import { unwrapForDevice, wrapForDevice, type WrappedGroupKey } from "./sync";
+import { unwrapForDevice, WRAP_VERSION, wrapForDevice, type WrappedGroupKey } from "./sync";
 
 export const SIGNATURE_LEN = 64;
 export const SIGNING_KEY_LEN = 32;
@@ -305,6 +305,9 @@ export async function signedWrapForDevice(
   const who = await asSigner(signer);
   if (epoch > list.manifest.epoch) throw new Error("The epoch is above the epoch of the member list.");
   const w = await wrapForDevice(groupKey, recipientPublic, context);
+  // since 0.16.0 (review 2026-11-18, F-10): a signed key is written only with the current wrap version (v2,
+  // domain label in the AAD); reading keeps accepting what an admin signed before
+  if (w.v !== WRAP_VERSION) throw new Error("Unsupported wrapped key version.");
   const st = { context, objectId, version: epoch, manifest: list.hash, recipient: recipientPublic, wrapped: wrappedKeyBytes(w) };
   const s = await who.sign(wrapMessage(st, who.publicKey));
   return { v: SIGNED_WRAP_VERSION, id: objectId, ver: epoch, m: b64(list.hash), w, k: b64(who.publicKey), s: b64(s) };
@@ -447,10 +450,17 @@ function encodeManifest(m: Manifest, signer: Uint8Array, checkKeys: boolean): Ui
   return message("manifest", fields);
 }
 
-/** Signs a list; the blob is `message || signature` and is carried as is (the server stores it opaque). */
+/**
+ * Signs a list; the blob is `message || signature` and is carried as is (the server stores it opaque).
+ * Since 0.16.0 two members with the same non-empty `seal` are refused.
+ */
 export async function signManifest(signer: Signer | Uint8Array, manifest: Manifest): Promise<Uint8Array> {
   const who = await asSigner(signer);
   const msg = manifestMessage(manifest, who.publicKey);
+  // since 0.16.0 (review 2026-11-18, F-07), only when a list is made: no two members share a non-empty seal.
+  // Lists signed before are read as they are (openManifest); the message bytes are unchanged.
+  const seals = manifest.members.filter((x) => x.seal.length > 0).map((x) => b64(x.seal));
+  if (new Set(seals).size !== seals.length) throw new Error("Duplicate member seal key.");
   return concat([msg, await who.sign(msg)]);
 }
 

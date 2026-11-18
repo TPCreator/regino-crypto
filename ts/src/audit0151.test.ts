@@ -24,7 +24,7 @@ import {
 import { newDeviceKeys, newGroupKey, publicKeyBytes } from './sync';
 
 const seed = (n: number) => new Uint8Array(32).fill(n);
-const member = async (id: string, admin: boolean, n: number): Promise<Member> => ({ id, role: 'member', admin, sign: await signingPublicKey(seed(n)), seal: new Uint8Array(65).fill(4), sealVersion: 1 });
+const member = async (id: string, admin: boolean, n: number): Promise<Member> => ({ id, role: 'member', admin, sign: await signingPublicKey(seed(n)), seal: Uint8Array.of(4, ...(await signingPublicKey(seed(n)))), sealVersion: 1 });
 
 function replace(blob: Uint8Array, from: Uint8Array, to: Uint8Array): Uint8Array {
   const out = blob.slice();
@@ -100,7 +100,7 @@ async function forkScenario() {
   const scope = 'demo|case|1';
   const keys = { anchor: seed(10), alice: seed(11), bob: seed(12), mallory: seed(13), mgmt: seed(14) };
   const pub = Object.fromEntries(await Promise.all(Object.entries(keys).map(async ([k, v]) => [k, await signingPublicKey(v)]))) as Record<keyof typeof keys, Uint8Array>;
-  const m = (id: 'alice' | 'bob' | 'mallory', admin: boolean): Member => ({ id, role: 'member', admin, sign: pub[id], seal: new Uint8Array(65).fill(4), sealVersion: 1 });
+  const m = (id: 'alice' | 'bob' | 'mallory', admin: boolean): Member => ({ id, role: 'member', admin, sign: pub[id], seal: Uint8Array.of(4, ...pub[id]), sealVersion: 1 });
   const v1b = await signManifest(keys.anchor, { scope, version: 1, epoch: 1, prev: new Uint8Array(32), members: [m('alice', true), m('bob', true)] });
   const v1 = await verifyManifest(v1b, scope, [pub.anchor]);
   const v2b = await signManifest(keys.alice, { ...nextManifest(v1, [m('alice', true)]), epoch: 2 });

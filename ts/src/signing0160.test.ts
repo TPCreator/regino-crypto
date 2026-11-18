@@ -26,10 +26,10 @@ async function scenario() {
   const dev = await newDeviceKeys();
   const devPub = await publicKeyBytes(dev.publicKey);
   const m = (id: 'alice' | 'bob' | 'carol', admin: boolean, seal: Uint8Array): Member => ({ id, role: 'member', admin, sign: pub[id], seal, sealVersion: 1 });
-  const other = new Uint8Array(65).fill(4);
-  const v1b = await signManifest(keys.anchor, { scope, version: 1, epoch: 1, prev: new Uint8Array(32), members: [m('alice', true, other), m('bob', true, other), m('carol', false, devPub)] });
+  const other = (id: 'alice' | 'bob') => Uint8Array.of(4, ...pub[id]);
+  const v1b = await signManifest(keys.anchor, { scope, version: 1, epoch: 1, prev: new Uint8Array(32), members: [m('alice', true, other('alice')), m('bob', true, other('bob')), m('carol', false, devPub)] });
   const v1 = await verifyManifest(v1b, scope, [pub.anchor]);
-  const v2b = await signManifest(keys.alice, { ...nextManifest(v1, [m('alice', true, other), m('carol', false, devPub)]), epoch: 2 });
+  const v2b = await signManifest(keys.alice, { ...nextManifest(v1, [m('alice', true, other('alice')), m('carol', false, devPub)]), epoch: 2 });
   const v2 = await verifyManifest(v2b, scope, [pub.anchor], v1);
   const f2b = await signManifest(keys.bob, nextManifest(v1, v1.manifest.members));
   const f2 = await verifyManifest(f2b, scope, [pub.anchor], v1);

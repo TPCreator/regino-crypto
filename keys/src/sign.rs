@@ -487,6 +487,17 @@ impl Manifest {
         self.members.iter().find(|m| &m.sign == key)
     }
 
+    /// Since 0.16.0 (review 2026-11-18, F-07), only when a list is **made** (signed): no two members share a
+    /// non-empty `seal`. Lists signed before are read as they are (`open_manifest` does not check this).
+    fn check_unique_seals(&self) -> Result<(), Error> {
+        let mut seals: Vec<&[u8]> = self.members.iter().map(|m| m.seal.as_slice()).filter(|s| !s.is_empty()).collect();
+        seals.sort();
+        if seals.windows(2).any(|w| w[0] == w[1]) {
+            return Err(Error::Format);
+        }
+        Ok(())
+    }
+
     fn message(&self, signer: &PublicKey) -> Result<Vec<u8>, Error> {
         if self.version == 0 || self.version > MAX_VERSION || self.epoch > MAX_VERSION || (self.version == 1) != (self.prev == [0u8; 32]) || self.members.len() > MAX_MEMBERS {
             return Err(Error::Format);
@@ -518,7 +529,9 @@ impl Manifest {
 }
 
 /// Signs a list; the blob is `message || signature` and is carried as is (the server stores it opaque).
+/// Since 0.16.0 two members with the same non-empty `seal` are refused (`Error::Format`).
 pub fn sign_manifest(key: &SigningKey, manifest: &Manifest) -> Result<Vec<u8>, Error> {
+    manifest.check_unique_seals()?;
     let mut blob = manifest.message(&key.public_key())?;
     let sig = key.sign_message(&blob);
     blob.extend_from_slice(&sig);

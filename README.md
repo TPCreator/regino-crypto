@@ -52,6 +52,7 @@ Known findings from a pre-audit review and their status: [`audits/`](audits/).
 - Format version in the header of every wrapped key and backup.
 - Tests on every change (`cargo test --workspace`, `npx vitest run --coverage` in `ts/` with 100 % coverage enforced for the TypeScript part; Rust coverage is not measured yet).
 - Independent security audit before production use.
+- **Apps that use the Rust crates** (`regino-vault`, `regino-keys` as a git dependency) keep the **same versions of the Rust dependencies as `Cargo.lock` of the core** at the pinned commit – only that combination is tested here. The app checks it in its CI (e.g. compares the versions of the shared packages in its own `Cargo.lock` with the core's) and moves them together with the core, never alone.
 
 ## Security
 Please report vulnerabilities privately – see [SECURITY.md](SECURITY.md).
