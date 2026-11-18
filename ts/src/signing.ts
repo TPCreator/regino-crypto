@@ -755,6 +755,45 @@ export async function verifyManifestChainFromAnchor(
   return out;
 }
 
+/**
+ * The member list for `openWriteKey` (since 0.16.0): every blob from version 1, the scope, the anchors (they
+ * anchor the chain and may also give keys, as in `openSignedWrap`) and the chain options –
+ * `requireAnchorOnLatest` is always on.
+ */
+export interface WriteKeyChain extends Omit<ChainOptions, "requireAnchorOnLatest"> {
+  blobs: readonly Uint8Array[];
+  scope: string;
+  anchors: readonly Uint8Array[];
+}
+
+/**
+ * Since 0.16.0: opens the key an app **seals new items with** (the write key), with every check that is
+ * optional elsewhere always on (the same as Rust `verify_write_key`):
+ * - the chain is verified from version 1 with `requireAnchorOnLatest` (the latest version signed or
+ *   confirmed by an anchor or one of `signers`), so a removed admin cannot continue an older version;
+ * - the key must be of the latest list's own epoch (`requireCurrentEpoch`), so a genuine key of an earlier
+ *   epoch (that a removed member still knows) is not taken as the current one;
+ * - the key must be for the member `recipientId` of that list, wrapped for its seal.
+ * Returns the key, the signer, the epoch and the latest accepted list; throws otherwise. Keys of earlier
+ * epochs for reading older items are opened with `openSignedWrap` as before; defaults there are unchanged.
+ */
+export async function openWriteKey(
+  signed: SignedWrappedKey,
+  devicePrivate: CryptoKey,
+  devicePublic: Uint8Array,
+  context: string,
+  objectId: string,
+  recipientId: string,
+  chain: WriteKeyChain,
+): Promise<{ groupKey: Uint8Array; signer: Uint8Array; epoch: number; list: AcceptedManifest }> {
+  if (typeof recipientId !== "string" || recipientId.length === 0) throw new Error("The recipient id is required.");
+  const { blobs, scope, anchors, ...opts } = chain;
+  const lists = await verifyManifestChainFromAnchor(blobs, scope, anchors, { ...opts, requireAnchorOnLatest: true });
+  const list = lists[lists.length - 1]!;
+  const key = await openSignedWrap(signed, devicePrivate, devicePublic, context, objectId, list, anchors, { recipientId, requireCurrentEpoch: true });
+  return { ...key, list };
+}
+
 /** The latest version is signed by one of `keys`, or one of them confirmed it (one check per key). */
 async function latestConfirmed(latest: AcceptedManifest, keys: readonly Uint8Array[], confirmations: readonly ManifestConfirmation[]): Promise<boolean> {
   if (has(keys, latest.signer)) return true;
