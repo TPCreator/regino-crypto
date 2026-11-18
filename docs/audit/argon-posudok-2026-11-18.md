@@ -252,3 +252,5 @@ Označenia: **potvrdené** = kód sa správa tak, ako model píše; **nepotvrden
 | 10 | Pripnúť Rust závislosti alebo zapísať pravidlo pre `Cargo.lock` aplikácií; haš pre `cargo-cyclonedx` | **Súhlas s pravidlom v README** (aplikácie kontrolujú zhodu verzií s `Cargo.lock` jadra). Haš pre `cargo-cyclonedx` je len malé spevnenie. |
 
 Čo model neodhalil a stojí za pozornosť: nič nové nad rámec AUDIT.md. Posudok je užitočný najmä ako nezávislé potvrdenie, že zámerné rozhodnutia (voliteľné kontroly S1/S2, pevná soľ pre id a kúsky) sú pre nezainteresovaného čitateľa ľahko prehliadnuteľné. To podporuje odporúčania 1 a 7.
+
+Druhý, menej významný poradný názor (Mistral Large 4, rovnaký prompt a podklady) s overením a porovnaním je v [mistral-posudok-2026-11-18.md](mistral-posudok-2026-11-18.md).
