@@ -44,6 +44,39 @@ jobs:
             exit 1
           fi
 
+  # Rust coverage (since 0.16.0, review 2026-11-18): cargo-llvm-cov pinned exactly, against the lockfiles;
+  # fails below 95 % of lines (0.16.0 measured 97.2 %).
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with: { toolchain: stable, components: llvm-tools-preview }
+      - run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - run: cargo llvm-cov --workspace --locked --summary-only --fail-under-lines 95
+
+  # Fuzzing of the parsers in regino-keys (since 0.16.0): sign (member lists, prepared messages, chains),
+  # shamir::combine, BackupCode::parse, wrap::unwrap_key – 60 s each on every change (keys/fuzz).
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults: { run: { working-directory: keys } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with: { toolchain: nightly }
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      # cargo fuzz has no --locked: check the committed keys/fuzz/Cargo.lock first (fails if it would change)
+      - run: cargo +nightly fetch --locked --manifest-path fuzz/Cargo.toml
+      - name: cargo fuzz run (60 s per target)
+        run: |
+          for t in sign shamir_combine backup_code_parse wrap_unwrap; do
+            cargo +nightly fuzz run "$t" -- -max_total_time=60
+          done
+
   # Dependencies: known vulnerabilities (RustSec), licenses, sources (deny.toml).
   deny:
     runs-on: ubuntu-latest
