@@ -71,8 +71,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 22 }
       - run: npm ci --no-audit --no-fund
+      # Runtime packages (what apps ship) fail from moderate up; dev-only packages fail from critical up
+      # (Tomáš 2026-11-18, docs/rozhodnutia.md: picomatch GHSA-fc5q-39xc-vjpf via vitest has no fixed version yet).
       - name: Vulnerable packages (npm audit)
-        run: npm audit --audit-level=moderate
+        run: |
+          npm audit --omit=dev --audit-level=moderate
+          npm audit --audit-level=critical
       - run: npx tsc --noEmit
       - name: npx vitest run --coverage
         shell: bash
