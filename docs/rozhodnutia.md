@@ -2,6 +2,12 @@
 
 Rozhodnutia Tomáša k jadru šifrovania (novšie hore).
 
+- **2026-11-18 – `npm audit` v CI: behové závislosti od `moderate`, vývojové od `critical`.** Centrála (Claude, technické
+  rozhodnutie podľa pravidla „rozhoduje Claude sám a Tomáša informuje“): nález `picomatch` (GHSA-fc5q-39xc-vjpf, ReDoS)
+  prichádza len cez vývojový `vitest` a opravená verzia neexistuje; blokuje každú zmenu vrátane posudku. Kontrola sa
+  rozdelí: `npm audit --omit=dev --audit-level=moderate` (to, čo aplikácie dostávajú, ostáva prísne) a
+  `npm audit --audit-level=critical` pre všetko; celý výpis sa naďalej vypíše. Po vydaní opravy `picomatch` vrátiť
+  vývojové závislosti na `moderate`.
 - **2026-11-18 – Posudok Gemini 4 Argon + Mistral: prijaté odporúčania (formáty sa nemenia).** Tomáš v hlavnej session
   Žiačika: „všetko áno“ – k `docs/audit/argon-posudok-2026-11-18.md`, kap. „10 odporúčaní (g) – moje stanovisko“.
   (1) fuzzing (`cargo-fuzz`: `sign`, `shamir::combine`, `BackupCode::parse`, `wrap::unwrap_key`) a `cargo llvm-cov` v CI;
