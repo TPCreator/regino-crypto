@@ -1,4 +1,4 @@
-import { verifyAsync } from '@noble/ed25519';
+import { verifyEd25519 } from './signing';
 
 /**
  * Signed tokens `<PREFIX>1.<payload base64url>.<Ed25519 signature base64url>`, signature over the
@@ -73,17 +73,17 @@ function peek(token: string): Payload | null {
   return t && parse(t.json);
 }
 
-/** Ed25519 signature check with strict RFC 8032 rules; false for any malformed input. */
+/**
+ * Ed25519 signature check with strict RFC 8032 rules; false for any malformed input. Since 0.16.0 the same
+ * check as `signing.ts` (`verifyEd25519`, the verdicts of ed25519-dalek `verify_strict`): the public key and
+ * R must also be free of a torsion component, so a token or certificate has exactly one valid signature.
+ */
 export async function verifySignature(
   signature: Uint8Array,
   message: Uint8Array,
   publicKey: Uint8Array,
 ): Promise<boolean> {
-  try {
-    return await verifyAsync(signature, message, publicKey, { zip215: false });
-  } catch {
-    return false;
-  }
+  return verifyEd25519(publicKey, message, signature);
 }
 
 /** Verifies the signature with a public key (base64url, 32 bytes); strict RFC 8032 checks. */
