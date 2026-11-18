@@ -251,7 +251,8 @@ fn from_sql(v: ValueRef<'_>) -> Result<Value, Error> {
         ValueRef::Integer(i) => Value::Number(i.into()),
         // NaN and ±Inf have no JSON form; refused like on the way in, never turned into null
         ValueRef::Real(f) => Number::from_f64(f).map(Value::Number).ok_or_else(|| Error::BadValue(f.to_string()))?,
-        ValueRef::Text(t) => Value::String(String::from_utf8_lossy(t).into_owned()),
+        // since 0.16.0 (review 2026-11-18, F-08): invalid UTF-8 is an error, not silently replaced
+        ValueRef::Text(t) => Value::String(std::str::from_utf8(t).map_err(|e| Error::BadValue(e.to_string()))?.to_owned()),
         ValueRef::Blob(_) => return Err(Error::BadValue("blob".into())),
     })
 }

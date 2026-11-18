@@ -299,6 +299,14 @@ fn non_finite_reals_are_rejected_on_read() {
     assert_eq!(v.all("SELECT 1.5 AS x", &[]).unwrap()[0]["x"], json!(1.5));
 }
 
+/// 0.16.0 (review 2026-11-18, F-08): text that is not valid UTF-8 is an error on read, never silently changed.
+#[test]
+fn invalid_utf8_text_is_rejected_on_read() {
+    let (_d, v) = open_tmp();
+    assert!(matches!(v.all("SELECT CAST(x'ff61' AS TEXT) AS x", &[]), Err(Error::BadValue(_))));
+    assert_eq!(v.all("SELECT CAST(x'c3a161' AS TEXT) AS x", &[]).unwrap()[0]["x"], json!("áa"));
+}
+
 /// Finding 4 of the 2026-10-22 review: `secure_delete` is a per-connection setting, so `open` must
 /// turn it on every time – read back on a fresh file and after a reopen.
 #[test]

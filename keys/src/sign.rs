@@ -487,6 +487,17 @@ impl Manifest {
         self.members.iter().find(|m| &m.sign == key)
     }
 
+    /// Since 0.16.0 (review 2026-11-18, F-07), only when a list is **made** (signed): no two members share a
+    /// non-empty `seal`. Lists signed before are read as they are (`open_manifest` does not check this).
+    fn check_unique_seals(&self) -> Result<(), Error> {
+        let mut seals: Vec<&[u8]> = self.members.iter().map(|m| m.seal.as_slice()).filter(|s| !s.is_empty()).collect();
+        seals.sort();
+        if seals.windows(2).any(|w| w[0] == w[1]) {
+            return Err(Error::Format);
+        }
+        Ok(())
+    }
+
     fn message(&self, signer: &PublicKey) -> Result<Vec<u8>, Error> {
         if self.version == 0 || self.version > MAX_VERSION || self.epoch > MAX_VERSION || (self.version == 1) != (self.prev == [0u8; 32]) || self.members.len() > MAX_MEMBERS {
             return Err(Error::Format);
@@ -518,7 +529,9 @@ impl Manifest {
 }
 
 /// Signs a list; the blob is `message || signature` and is carried as is (the server stores it opaque).
+/// Since 0.16.0 two members with the same non-empty `seal` are refused (`Error::Format`).
 pub fn sign_manifest(key: &SigningKey, manifest: &Manifest) -> Result<Vec<u8>, Error> {
+    manifest.check_unique_seals()?;
     let mut blob = manifest.message(&key.public_key())?;
     let sig = key.sign_message(&blob);
     blob.extend_from_slice(&sig);
@@ -897,6 +910,36 @@ pub fn verify_manifest_chain_from_anchor_with(blobs: &[&[u8]], scope: &str, anch
         }
     }
     Ok(out)
+}
+
+/// The chain of member lists for [`verify_write_key`] (since 0.16.0): every blob from version 1, the scope, the
+/// anchors (they anchor the chain and may also give keys, as in [`verify_wrap_for`]) and the chain options.
+#[derive(Clone, Copy, Debug)]
+pub struct WriteKeyChain<'a> {
+    pub blobs: &'a [&'a [u8]],
+    pub scope: &'a str,
+    pub anchors: &'a [PublicKey],
+    /// `require_anchor_on_latest` is always on, whatever is set here.
+    pub opts: &'a ChainOptions,
+}
+
+/// Since 0.16.0: the check for the key an app **seals new items with** (the write key), with every check
+/// that is optional elsewhere always on – the same as `openWriteKey` in TypeScript:
+/// - the chain is verified from version 1 with `require_anchor_on_latest` (the latest version signed or
+///   confirmed by an anchor or one of `signers`), so a removed admin cannot continue an older version;
+/// - the key must be of the latest list's own epoch (`require_current_epoch`), so a genuine key of an earlier
+///   epoch (that a removed member still knows) is not taken as the current one;
+/// - the key must be wrapped for the member `recipient_id` of that list (its `seal`).
+///
+/// Returns the latest accepted list. Errors as [`verify_manifest_chain_from_anchor_with`] and
+/// [`verify_wrap_for_with`]. Keys of earlier epochs for reading older items are checked with
+/// [`verify_wrap_for_with`] as before; defaults elsewhere are unchanged.
+pub fn verify_write_key(chain: &WriteKeyChain, recipient_id: &str, signer: &PublicKey, st: &WrapStatement, signature: &[u8]) -> Result<AcceptedManifest, Error> {
+    let opts = ChainOptions { require_anchor_on_latest: true, ..chain.opts.clone() };
+    let mut lists = verify_manifest_chain_from_anchor_with(chain.blobs, chain.scope, chain.anchors, &opts)?;
+    let list = lists.pop().expect("not empty");
+    verify_wrap_for_with(&list, chain.anchors, signer, st, signature, &WrapOptions { recipient_id: Some(recipient_id), require_current_epoch: true })?;
+    Ok(list)
 }
 
 /// One version of a chain read by [`inspect_manifest_chain`] – **not trusted**: nobody vouched for the

@@ -1,6 +1,7 @@
 import { getPublicKeyAsync, signAsync, utils } from '@noble/ed25519';
 import { describe, expect, it } from 'vitest';
 import ed25519 from '../../testvectors/wycheproof/ed25519_test.json';
+import signing130 from '../../testvectors/regino/signing-0.13.0.json';
 import * as signed from './signed';
 import {
   certifiedKeys,
@@ -242,5 +243,12 @@ describe('signed tokens', () => {
       }
     }
     expect(n).toBe(151);
+  });
+  it('0.16.0 (review 2026-11-18, F-03): the same strict verdicts as signing.ts – torsion in A or R is refused', async () => {
+    const raw = (signing130 as unknown as { raw: { case: string; public: string; message: string; signature: string; valid: boolean; noble_cofactored: boolean }[] }).raw;
+    for (const t of raw) expect(await verifySignature(hex(t.signature), hex(t.message), hex(t.public)), t.case).toBe(t.valid);
+    // the cases the library's own check would accept and the strict check refuses
+    expect(raw.filter((t) => t.noble_cofactored && !t.valid).map((t) => t.case)).toEqual(['R with a torsion component', 'public key with a torsion component']);
+    expect(await verifySignature(new Uint8Array(63), hex(raw[0]!.message), hex(raw[0]!.public))).toBe(false);
   });
 });

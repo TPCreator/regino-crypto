@@ -1,9 +1,11 @@
 // Audit S1/S2 (0.15.1): shared vectors with Rust (keys/tests/signing_0_15_1.rs) – messages, signatures, verdicts.
+import { signAsync } from '@noble/ed25519';
 import { describe, expect, it } from 'vitest';
 import v from '../../testvectors/regino/signing-0.15.1.json';
 import {
   confirmManifest,
   manifestConfirmationMessage,
+  manifestMessage,
   openManifest,
   signingPublicKey,
   signManifest,
@@ -29,7 +31,15 @@ describe('signing vectors 0.15.1', () => {
       const a = await list(n);
       expect(hex(a.hash)).toBe(v.hashes[n]);
       const signer = (['anchor', 'alice', 'bob'] as const).find((s) => v.public[s] === hex(a.signer))!;
-      expect(hex(await signManifest(seed(signer), a.manifest))).toBe(v.blobs[n]);
+      // Ed25519 is deterministic: the same message gives the same blob
+      const msg = manifestMessage(a.manifest, a.signer);
+      expect(hex(msg) + hex(await signAsync(msg, seed(signer)))).toBe(v.blobs[n]);
+      // v1 and f2 of the fixture give alice and bob one seal: read as before, but since 0.16.0 such a list is
+      // not made again (F-07); v2 has one member and is signed to the same blob
+      const shared = a.manifest.members.length > 1 && a.manifest.members.every((m) => hex(m.seal) === hex(a.manifest.members[0]!.seal));
+      expect(shared, n).toBe(n !== 'v2');
+      if (shared) await expect(signManifest(seed(signer), a.manifest)).rejects.toThrow('Duplicate member seal key.');
+      else expect(hex(await signManifest(seed(signer), a.manifest))).toBe(v.blobs[n]);
     }
     for (const c of v.confirmations) {
       const l = await list(c.list as ListName);
