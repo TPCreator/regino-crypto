@@ -2,6 +2,9 @@
 
 Rozhodnutia Tomáša k jadru šifrovania (novšie hore).
 
+- **2026-11-20 – 0.16.1: trezor bez pripojených databáz (`ATTACH`, `VACUUM INTO`).** Tomáš 2026-11-20 („potvrdzujem“ –
+  body B kontroly Dôverníka v1, `Dovernik/docs/kontrola-v1-2026-11-20.md` B1): obmedzenie patrí do jadra, nie do aplikácie.
+  `SQLITE_LIMIT_ATTACHED = 0` pri otvorení, `compact` ho zdvihne len na vlastný `VACUUM`. Formáty sa nemenia.
 - **2026-11-18 – `npm audit` v CI: behové závislosti od `moderate`, vývojové od `critical`.** Tomáš v hlavnej session
   Žiačika: „všetko áno“ (k návrhu Centrály): nález `picomatch` (GHSA-fc5q-39xc-vjpf, ReDoS) prichádza len cez vývojový
   `vitest`, opravená verzia neexistuje. Kontrola: `npm audit --omit=dev --audit-level=moderate` a

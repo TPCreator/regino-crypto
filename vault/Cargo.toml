@@ -1,6 +1,6 @@
 [package]
 name = "regino-vault"
-version = "0.16.0"
+version = "0.16.1"
 edition = "2021"
 description = "Encrypted local database (SQLCipher) with the key in the OS keystore – shared by Regino apps"
 authors = ["regino-crypto contributors"]
@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-rusqlite = { version = "0.42", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.42", features = ["bundled-sqlcipher-vendored-openssl", "limits"] }
 serde_json = "1"
 zeroize = "1"
 getrandom = "0.4"

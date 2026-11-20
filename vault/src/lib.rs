@@ -4,7 +4,7 @@
 //! - Values pass through as JSON (numbers, text, null) so they can be sent over the Tauri bridge.
 //! - Knows nothing about the app's tables – the app handles schema and migrations (e.g. with its own TypeScript layer).
 
-use rusqlite::{types::ValueRef, Connection, OpenFlags};
+use rusqlite::{limits::Limit, types::ValueRef, Connection, OpenFlags};
 use serde_json::{Map, Number, Value};
 use std::path::Path;
 use zeroize::Zeroizing;
@@ -131,6 +131,12 @@ impl Vault {
         conn.execute_batch(
             "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA secure_delete = ON;",
         )?;
+        // No attached databases (since 0.16.1, Dôverník quality check 2026-11-20, B1): `exec`/`run`/`all`
+        // take SQL from the app's window, and `ATTACH 'C:/…/x' AS x KEY ''` or `VACUUM INTO '…'` would
+        // write an UNENCRYPTED file anywhere on disk. With the limit at 0 SQLite refuses both ("too
+        // many attached databases" – `VACUUM INTO` attaches its target the same way). `compact` lifts
+        // the limit only for its own fixed `VACUUM` (which attaches a temporary database internally).
+        conn.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)?;
         Ok(Vault { conn })
     }
 
@@ -163,7 +169,12 @@ impl Vault {
     /// - Because it can block for seconds, do not call it on the UI thread.
     pub fn compact(&self) -> Result<(), Error> {
         self.checkpoint_truncate()?;
-        self.conn.execute_batch("VACUUM;")?;
+        // plain `VACUUM` attaches a temporary database internally – allowed only here, and the limit
+        // is back at 0 before any other statement can run (the connection is not shared: `Vault` is not `Sync`)
+        self.conn.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 1)?;
+        let vacuum = self.conn.execute_batch("VACUUM;");
+        self.conn.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)?;
+        vacuum?;
         self.checkpoint_truncate()
     }
 
