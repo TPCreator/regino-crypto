@@ -386,3 +386,28 @@ fn secure_delete_leaves_no_deleted_text_in_a_plaintext_file() {
     assert_eq!(remains_after_delete("ON", false), (false, false), "secure_delete alone");
     assert_eq!(remains_after_delete("ON", true), (false, false), "secure_delete + compact steps");
 }
+
+/// 0.16.1 (Dôverník quality check 2026-11-20, B1): SQL from the app's window must not write a file
+/// outside the vault – no `ATTACH` (an attached database with an empty key is plaintext) and no
+/// `VACUUM INTO`, through `exec`, `run` and `all`. `compact` (plain `VACUUM`) still works and the
+/// limit is back afterwards.
+#[test]
+fn attach_and_vacuum_into_are_refused() {
+    let (dir, v) = open_tmp();
+    v.exec("CREATE TABLE t (x TEXT); INSERT INTO t VALUES ('tajne');").unwrap();
+    let out = dir.path().join("plain.db");
+    let q = out.to_string_lossy().replace('\'', "''");
+    let attach = format!("ATTACH DATABASE '{q}' AS x KEY ''");
+    let vacuum_into = format!("VACUUM INTO '{q}'");
+    for sql in [attach.as_str(), vacuum_into.as_str()] {
+        assert!(v.exec(sql).is_err(), "exec: {sql}");
+        assert!(v.run(sql, &[]).is_err(), "run: {sql}");
+        assert!(v.all(sql, &[]).is_err(), "all: {sql}");
+        assert!(!out.exists(), "a file was written by: {sql}");
+    }
+    v.compact().unwrap();
+    assert!(v.exec(&attach).is_err(), "ATTACH allowed again after compact");
+    assert!(v.exec(&vacuum_into).is_err(), "VACUUM INTO allowed again after compact");
+    assert!(!out.exists());
+    assert_eq!(v.all("SELECT x FROM t", &[]).unwrap()[0]["x"], json!("tajne"));
+}
