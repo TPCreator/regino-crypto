@@ -58,7 +58,7 @@ jobs:
       - run: cargo llvm-cov --workspace --locked --summary-only --fail-under-lines 95
 
   # Fuzzing of the parsers in regino-keys (since 0.16.0): sign (member lists, prepared messages, chains),
-  # shamir::combine, BackupCode::parse, wrap::unwrap_key – 60 s each on every change (keys/fuzz).
+  # shamir::combine, BackupCode::parse, wrap::unwrap_key, keyfile::unwrap_master (0.22.0) – 60 s each on every change (keys/fuzz).
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -73,7 +73,7 @@ jobs:
       - run: cargo +nightly fetch --locked --manifest-path fuzz/Cargo.toml
       - name: cargo fuzz run (60 s per target)
         run: |
-          for t in sign shamir_combine backup_code_parse wrap_unwrap; do
+          for t in sign shamir_combine backup_code_parse wrap_unwrap keyfile_unwrap; do
             cargo +nightly fuzz run "$t" -- -max_total_time=60
           done
 
