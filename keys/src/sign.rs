@@ -49,6 +49,17 @@ pub const MAX_MEMBERS: usize = 1000;
 pub const MAX_WRAPPED: usize = 65536;
 /// Largest version or epoch: 2^53 − 1 (the largest whole number TypeScript holds exactly).
 pub const MAX_VERSION: u64 = (1 << 53) - 1;
+/// Longest member list blob (message ‖ signature) a canonical list can have: every field at its limit and
+/// [`MAX_MEMBERS`] members – 1 602 216 bytes. Since 0.17.0 (audit validation 2026-11-25, L-06) a longer blob
+/// is refused before anything is decoded or copied; no list that was ever accepted is longer.
+pub const MAX_MANIFEST_LEN: usize = MAGIC.len()
+    + (4 + 8) // kind "manifest"
+    + (4 + MAX_CONTEXT) // scope
+    + 2 * (4 + 8) // version, epoch
+    + 2 * (4 + 32) // prev, signer
+    + (4 + 4) // member count
+    + MAX_MEMBERS * (2 * (4 + MAX_NAME) + (4 + 1) + (4 + PUBLIC_KEY_LEN) + (4 + 8) + (4 + MAX_KEY))
+    + SIGNATURE_LEN;
 
 /// A personal Ed25519 signing key; its memory is zeroed when dropped.
 pub struct SigningKey(ed25519_dalek::SigningKey);
@@ -559,7 +570,7 @@ impl<'a> Reader<'a> {
 /// Reads a blob and checks its signature against the key named inside – **not** whether that key is
 /// trusted. Only for a blob the app accepted before with [`verify_manifest`] and stored itself.
 pub fn open_manifest(blob: &[u8]) -> Result<AcceptedManifest, Error> {
-    if blob.len() < MAGIC.len() + SIGNATURE_LEN {
+    if blob.len() < MAGIC.len() + SIGNATURE_LEN || blob.len() > MAX_MANIFEST_LEN {
         return Err(Error::Format);
     }
     let (msg, sig) = blob.split_at(blob.len() - SIGNATURE_LEN);

@@ -165,16 +165,33 @@ export async function verifyWithKeys(
   token: string,
   keys: readonly CertifiedKey[],
   expect: { prefix: string; product: string; use: string },
-  at?: number,
+  at?: number | null,
 ): Promise<Payload | null> {
   const kid = peek(token)?.kid;
   const key = keys.find((k) => k.kid === kid && k.product === expect.product && k.use === expect.use);
   const v = key ? await verifyToken(token, key.pub) : null;
   if (!v || v.prefix !== expect.prefix || v.payload.product !== expect.product || v.payload.typ === 'cert') return null;
   const p = v.payload;
-  if (at !== undefined) {
+  if (at !== undefined && at !== null) {
     if (p.nbf !== undefined && p.nbf !== null && (!time(p.nbf) || p.nbf > at)) return null;
     if (p.exp !== undefined && p.exp !== null && (!time(p.exp) || p.exp < at)) return null;
   }
   return p;
+}
+
+/**
+ * Since 0.17.0 (audit validation 2026-11-25, L-05): `verifyWithKeys` with the time as a **required**
+ * argument, so forgetting it is a type error instead of a token that never expires. `at` = now in seconds
+ * since 1970 (UTC), e.g. `Math.floor(Date.now() / 1000)` – `nbf` after it or `exp` before it refuses the
+ * token. `null` says explicitly that the caller checks validity in time itself (licence tokens: `valid_to`,
+ * `grace_days`). Anything else (a fraction, NaN, a string, a missing argument) throws.
+ */
+export async function verifyWithKeysAt(
+  token: string,
+  keys: readonly CertifiedKey[],
+  expect: { prefix: string; product: string; use: string },
+  at: number | null,
+): Promise<Payload | null> {
+  if (at !== null && !(Number.isSafeInteger(at) && at >= 0)) throw new Error('`at` must be the time in whole seconds (or null).');
+  return verifyWithKeys(token, keys, expect, at);
 }

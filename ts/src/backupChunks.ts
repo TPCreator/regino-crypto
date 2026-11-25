@@ -109,19 +109,47 @@ export interface ChunkedFile {
   chunks: string[];
 }
 
+/** Deepest nesting of a payload that `findChunkedFiles` walks (since 0.17.0). */
+export const MAX_PAYLOAD_DEPTH = 64;
+
+/**
+ * A file name that is safe to offer for download (since 0.17.0, audit validation 2026-11-25, L-07): the last
+ * path segment only, no control or reserved characters (`<>:"/\|?*`), no leading dots or trailing dots and
+ * spaces, at most 120 characters; `file` when nothing is left. The name comes from inside a backup.
+ */
+export function safeFileName(name: string): string {
+  const base = name.split(/[\\/]/).pop() as string;
+  const clean = base.replace(/[\u0000-\u001f\u007f-\u009f<>:"|?*\u202a-\u202e\u2066-\u2069]/g, '_').replace(/^[.\s]+|[.\s]+$/g, '');
+  const short = [...clean].slice(0, 120).join('');
+  return short || 'file';
+}
+
+const MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$/i;
+
+/**
+ * Finds the chunked files anywhere in a payload. Since 0.17.0 the name is made safe for a download
+ * (`safeFileName`), a `mime` that is not a plain `type/subtype` is dropped, and a payload nested deeper than
+ * `MAX_PAYLOAD_DEPTH` is refused (a crafted backup cannot exhaust the stack).
+ */
 export function findChunkedFiles(payload: unknown): ChunkedFile[] {
   const out: ChunkedFile[] = [];
-  const walk = (v: unknown) => {
-    if (Array.isArray(v)) return v.forEach(walk);
+  const walk = (v: unknown, depth: number) => {
+    if (depth > MAX_PAYLOAD_DEPTH) throw new Error('The backup content is nested too deeply.');
+    if (Array.isArray(v)) return v.forEach((x) => walk(x, depth + 1));
     if (!v || typeof v !== 'object') return;
     const o = v as Record<string, unknown>;
     if (Array.isArray(o.chunks) && o.chunks.length && o.chunks.every((c) => typeof c === 'string' && NAME.test(c))) {
-      out.push({ name: typeof o.name === 'string' && o.name ? o.name : 'file', mime: typeof o.mime === 'string' ? o.mime : undefined, size: typeof o.size === 'number' ? o.size : undefined, chunks: o.chunks as string[] });
+      out.push({
+        name: typeof o.name === 'string' ? safeFileName(o.name) : 'file',
+        mime: typeof o.mime === 'string' && MIME.test(o.mime) ? o.mime : undefined,
+        size: typeof o.size === 'number' ? o.size : undefined,
+        chunks: o.chunks as string[],
+      });
       return;
     }
-    Object.values(o).forEach(walk);
+    Object.values(o).forEach((x) => walk(x, depth + 1));
   };
-  walk(payload);
+  walk(payload, 0);
   return out;
 }
 
