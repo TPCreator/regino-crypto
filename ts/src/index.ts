@@ -22,11 +22,24 @@ export {
   type BackupCodeKdf,
 } from './backupCode';
 export * from './backupChunks';
+// key from a password (since 0.18.0): Argon2id as Rust `regino_keys::kdf::derive`
+export * from './kdf';
 export * from './openBackup';
 export * from './pin';
 export * from './recovery';
 export * from './wordlist-sk';
 export * from './sheet';
+// Shamir key shares (since 0.18.0): the public API only (the field arithmetic stays internal)
+export {
+  SHAMIR_SHARE_LENGTH,
+  SHARE_QR_PREFIX,
+  combineShares,
+  shareFromQrText,
+  shareInfo,
+  shareQrText,
+  splitKey,
+  type ShamirError,
+} from './shamir';
 export * from './signed';
 export * from './sync';
 export * from './inbox';

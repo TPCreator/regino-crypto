@@ -2,6 +2,14 @@
 
 Rozhodnutia Tomáša k jadru šifrovania (novšie hore).
 
+- **2026-11-25 – Body § 7 validácie: Testurion na `main` jadra (0.18.0), záloha v4 pripraviť v jadre.** Tomáš 2026-11-25
+  v hlavnej session Žiačika: „4 nechcem, ostatne chcem“ (Ziacik `docs/rozhodnutia.md` 2026-11-25) – k § 7
+  `docs/validacia-auditu-2026-11-25.md`. Pre jadro: (3) dokončiť PR #40 (Shamir GF(256) a `passwordKey` v TypeScripte)
+  na aktuálnom `main` – vektory zhodné s Rust `shamir` vrátane rovnakých podielov z rovnakého vstupu, kontroly ako
+  v Ruste, 100 % pokrytie – a zlúčiť ako **0.18.0**; Testurion pripnúť na zlúčený commit `main` (nie na vetvu).
+  (5) **záloha v4** (F-02): kľúče kúskov a id pre server z náhodnej soli zálohy a parametrov KDF hlavičky, Rust aj TS
+  zhodne; v1–v3 sa naďalej otvoria; do Žiačika až s jeho ďalším väčším vydaním. (4) šifrovanie disku ako podmienka
+  pre Dôverník a DysPro – **nie** (ostáva odporúčanie). Body (1) a (2) sú úlohy aplikácií (`docs/plan-aplikacie-2026-11-25.md`).
 - **2026-11-25 – Validácia externého auditu 0.16.1 a 0.17.0.** Tomáš 2026-11-25 v hlavnej session: „potrebujem jednu session na
   validaciu tohto“ (audit Devin, 97518c5). Opravy bez zmeny formátov vo verzii 0.17.0 (autorizátor trezoru proti `PRAGMA
   key/rekey/cipher_*`/`secure_delete`, `structuredContext`, `verifyWithKeysAt`, `MAX_MANIFEST_LEN`, bezpečné názvy v nástroji);

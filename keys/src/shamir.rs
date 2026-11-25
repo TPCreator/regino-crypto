@@ -36,9 +36,15 @@ pub fn split_zeroizing(key: &Key, threshold: u8, shares: u8) -> Result<Vec<Zeroi
     if threshold < 2 || shares < threshold {
         return Err(Error::BadSplit { threshold, shares });
     }
+    Ok(encode(key, threshold, shares, Sharks(threshold).dealer(key.as_bytes())))
+}
+
+/// The shares of a dealer in the share format. Shared by [`split_zeroizing`] (dealer with the system random
+/// source) and the test with given coefficients (`deterministic_shares_match_typescript`), so both build the
+/// bytes the same way.
+fn encode(key: &Key, threshold: u8, shares: u8, dealer: impl Iterator<Item = Share>) -> Vec<Zeroizing<Vec<u8>>> {
     let fp = fingerprint(key);
-    let dealer = Sharks(threshold).dealer(key.as_bytes());
-    Ok(dealer
+    dealer
         .take(shares as usize)
         .map(|s| {
             let body = Zeroizing::new(Vec::from(&s));
@@ -50,7 +56,7 @@ pub fn split_zeroizing(key: &Key, threshold: u8, shares: u8) -> Result<Vec<Zeroi
             debug_assert_eq!(out.len(), SHARE_LEN);
             out
         })
-        .collect())
+        .collect()
 }
 
 /// Reassembles the key from shares. At least `threshold` distinct shares of the same key are required.
@@ -106,4 +112,66 @@ fn combine_any<P: AsRef<[u8]>>(parts: &[P]) -> Result<Key, Error> {
         return Err(Error::BadShares);
     }
     Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Same input, same shares (0.18.0): with the random coefficients given, Rust (through `blahaj`) must write
+    //! exactly the shares that TypeScript `splitKey` writes (`testvectors/regino/shamir-0.18.0.json`,
+    //! `deterministic`; the TypeScript side is checked in `ts/src/shamir.test.ts`).
+    use super::*;
+    use core::convert::Infallible;
+    use serde_json::Value;
+
+    /// A "random" source that returns the given coefficients: `blahaj` draws each coefficient as
+    /// `Uniform::new_inclusive(0, 255)` of `u8`, which in `rand` 0.10 is the low byte of one `next_u32`.
+    struct Given(std::vec::IntoIter<u8>);
+
+    impl rand_core::TryRng for Given {
+        type Error = Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Infallible> {
+            Ok(u32::from(self.0.next().expect("enough coefficients")))
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Infallible> {
+            unreachable!("blahaj draws u8 coefficients through next_u32")
+        }
+        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Infallible> {
+            unreachable!("blahaj draws u8 coefficients through next_u32")
+        }
+    }
+    impl rand_core::TryCryptoRng for Given {}
+
+    fn hex(v: &Value) -> Vec<u8> {
+        let s = v.as_str().expect("hex string");
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect()
+    }
+
+    #[test]
+    fn deterministic_shares_match_typescript() {
+        let doc: Value =
+            serde_json::from_str(include_str!("../../testvectors/regino/shamir-0.18.0.json")).expect("JSON");
+        let cases = doc["deterministic"].as_array().expect("deterministic cases");
+        assert_eq!(cases.len(), 5);
+        for c in cases {
+            let name = c["name"].as_str().unwrap();
+            let key = Key::from_slice(&hex(&c["key"])).unwrap();
+            let threshold = c["threshold"].as_u64().unwrap() as u8;
+            let count = c["count"].as_u64().unwrap() as u8;
+            let coefficients = hex(&c["coefficients"]);
+            assert_eq!(coefficients.len(), KEY_LEN * (threshold as usize - 1), "{name}");
+            let mut rng = Given(coefficients.into_iter());
+            let dealer = Sharks(threshold).dealer_rng(key.as_bytes(), &mut rng);
+            let ours = encode(&key, threshold, count, dealer);
+            assert!(rng.0.next().is_none(), "{name}: every coefficient used once");
+            let theirs: Vec<Vec<u8>> = c["shares"].as_array().unwrap().iter().map(hex).collect();
+            assert_eq!(ours.len(), theirs.len(), "{name}");
+            for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+                assert_eq!(a.as_slice(), b.as_slice(), "{name}, share {}", i + 1);
+            }
+            // and they combine to the key (the first `threshold` and the last `threshold`)
+            let t = threshold as usize;
+            assert_eq!(combine_zeroizing(&ours[..t]).unwrap(), key, "{name}");
+            assert_eq!(combine(&theirs[theirs.len() - t..]).unwrap(), key, "{name}");
+        }
+    }
 }

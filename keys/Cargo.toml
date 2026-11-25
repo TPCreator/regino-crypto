@@ -1,6 +1,6 @@
 [package]
 name = "regino-keys"
-version = "0.17.0"
+version = "0.18.0"
 edition = "2021"
 description = "Keys for Regino apps: Argon2id from a password, key wrapping (XChaCha20-Poly1305), 2-of-3 splitting (Shamir), Ed25519 signatures"
 authors = ["regino-crypto contributors"]
@@ -23,3 +23,5 @@ ed25519-dalek = "=3.0.0"
 
 [dev-dependencies]
 serde_json = "1"
+# only the traits for a test source with given Shamir coefficients (`shamir::tests`); already in Cargo.lock via blahaj/rand
+rand_core = "0.10"

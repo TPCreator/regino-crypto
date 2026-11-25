@@ -617,7 +617,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "regino-keys"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -627,6 +627,7 @@ dependencies = [
  "getrandom",
  "hkdf",
  "hmac",
+ "rand_core",
  "serde_json",
  "sha2",
  "subtle",
@@ -636,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "regino-vault"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "getrandom",
  "keyring-core",
