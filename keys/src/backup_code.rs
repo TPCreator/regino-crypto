@@ -7,9 +7,10 @@
 //! - Reading tolerates lower case, spaces, hyphens/dashes, the QR prefix `RGC1:` and `O → 0`, `I / L → 1`;
 //!   errors say what is wrong ([`CodeError`]).
 //! - The secret is 10 bytes (75 bits + 5 zero bits). Keys always go through Argon2id (the code has only
-//!   75 bits): a backup with a random salt and parameters from its header ([`backup_key`]), the id for a
-//!   server and the keys of backup chunks with the fixed salt of the application ([`backup_code_id`],
-//!   [`crate::backup_chunks::BackupChunkKeys::from_backup_code`]).
+//!   75 bits): a backup with a random salt and parameters from its header ([`backup_key`]), the keys of
+//!   backup chunks of version-3 backups with the fixed salt of the application
+//!   ([`crate::backup_chunks::BackupChunkKeys::from_backup_code`]); version 4 ([`backup_key_v4`], [`backup_id`]).
+//!   `backup_code_id` (fixed salt) was removed in 0.21.0 (audit F-02).
 //!
 //! Backups themselves (JSON, AES-256-GCM) are written in TypeScript; Rust derives the same keys.
 
@@ -259,14 +260,6 @@ pub(crate) fn base(code: &BackupCode, app: &str) -> Result<Key, Error> {
     stretch(code, &app_salt(app)?, DEFAULT_PARAMS)
 }
 
-/// Id of a code for a server: HKDF-SHA256(base, `<app> backup-code id v1`). It reveals neither the code
-/// nor a key, but guesses can be tested against it offline at Argon2id cost – the server must keep it
-/// like a password hash and limit the number of attempts of anyone asking by id (`AUDIT.md`, question 20).
-/// For backups of version 3: the fixed salt lets one guess test every id of the application at once and the cost
-/// is always [`DEFAULT_PARAMS`] (audit F-02) – new apps use [`backup_id`] with the parameters of a version-4 backup.
-pub fn backup_code_id(code: &BackupCode, app: &str) -> Result<[u8; 32], Error> {
-    Ok(*expand(&base(code, app)?, &format!("{app} backup-code id v1")).as_bytes())
-}
 
 // ---- version 4 (since 0.19.0, audit F-02) ----
 //

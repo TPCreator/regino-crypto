@@ -9,7 +9,6 @@ export {
   MAX_BACKUP_CODE_KDF,
   MIN_BACKUP_CODE_KDF,
   MOBILE_BACKUP_CODE_KDF,
-  backupCodeId,
   backupIdForServer,
   newBackupCodeParams,
   type BackupCodeParams,
