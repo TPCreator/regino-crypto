@@ -49,3 +49,5 @@ export * from './inbox';
 export * from './signing';
 export * from './groupKey';
 export * from './context';
+// device key + short PIN as a gate, passkey PRF (since 0.20.0)
+export * from './deviceVault';
