@@ -1,4 +1,4 @@
-//! Shamir shares made by the TypeScript side (0.16.0, `testvectors/regino/shamir-0.16.0.json`, `ts/src/shamir.ts`).
+//! Shamir shares made by the TypeScript side (0.18.0, `testvectors/regino/shamir-0.18.0.json`, `ts/src/shamir.ts`).
 //! Every subset of at least `threshold` shares gives the key here, every smaller subset is refused, and the
 //! refused cases end with the error the vector names. The other direction (shares made by Rust combined in
 //! TypeScript) is `keys-0.11.1.json` in `ts/src/shamir.test.ts`.
@@ -12,7 +12,7 @@ fn hex(v: &Value) -> Vec<u8> {
 }
 
 fn vectors() -> Value {
-    serde_json::from_str(include_str!("../../testvectors/regino/shamir-0.16.0.json")).expect("JSON")
+    serde_json::from_str(include_str!("../../testvectors/regino/shamir-0.18.0.json")).expect("JSON")
 }
 
 fn shares(v: &Value) -> Vec<Vec<u8>> {
@@ -22,7 +22,7 @@ fn shares(v: &Value) -> Vec<Vec<u8>> {
 #[test]
 fn shares_made_by_typescript_combine_in_rust() {
     let doc = vectors();
-    assert_eq!(doc["version"], "0.16.0");
+    assert_eq!(doc["version"], "0.18.0");
     let cases = doc["split"].as_array().unwrap();
     assert_eq!(cases.len(), 5);
     for c in cases {

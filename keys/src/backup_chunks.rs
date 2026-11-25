@@ -82,6 +82,8 @@ impl BackupChunkKeys {
     }
 
     /// Seals a chunk; returns its name and the file contents.
+    /// Limit (AES-256-GCM with a random 96-bit nonce under the fixed chunk key): at most 2^32 sealed chunks per
+    /// recovery code or backup code (NIST SP 800-38D), far above the expected use.
     pub fn seal(&self, plain: &[u8]) -> Result<(String, Vec<u8>), Error> {
         let name = self.name(plain);
         let mut nonce = [0u8; 12];

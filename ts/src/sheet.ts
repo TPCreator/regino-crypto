@@ -88,7 +88,7 @@ export async function recoveryQrSvg(secret: Uint8Array, quiet = 4, lang: SheetLa
 }
 
 /**
- * QR code of one Shamir key share (since 0.16.0): the text `RGS1:…` of `shareQrText` (share + 2 check
+ * QR code of one Shamir key share (since 0.18.0): the text `RGS1:…` of `shareQrText` (share + 2 check
  * bytes), error correction "M". For a printed share sheet next to the share's number (`shareInfo`).
  */
 export async function shareQrMatrix(share: Uint8Array): Promise<boolean[][]> {

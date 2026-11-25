@@ -1,7 +1,7 @@
 import jsQR from 'jsqr';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import rust from '../../testvectors/regino/keys-0.11.1.json';
-import v from '../../testvectors/regino/shamir-0.16.0.json';
+import v from '../../testvectors/regino/shamir-0.18.0.json';
 import {
   SHAMIR_SHARE_LENGTH,
   SHARE_QR_PREFIX,
@@ -15,7 +15,7 @@ import {
 } from './shamir';
 import { shareQrMatrix, shareQrSvg } from './sheet';
 
-// Shamir 2 of 3 in TypeScript (0.16.0), byte for byte the same as Rust `regino_keys::shamir` (blahaj 0.7).
+// Shamir 2 of 3 in TypeScript (0.18.0), byte for byte the same as Rust `regino_keys::shamir` (blahaj 0.7).
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 const unhex = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (x) => parseInt(x, 16));
 const randomKey = () => crypto.getRandomValues(new Uint8Array(32));
@@ -83,9 +83,9 @@ describe('shares made by Rust (keys-0.11.1.json)', () => {
   );
 });
 
-describe('shared vectors made by TypeScript (shamir-0.16.0.json, combined by Rust too)', () => {
+describe('shared vectors made by TypeScript (shamir-0.18.0.json, combined by Rust too)', () => {
   it('version and cases', () => {
-    expect(v.version).toBe('0.16.0');
+    expect(v.version).toBe('0.18.0');
     expect(v.split).toHaveLength(5);
     expect(v.refused).toHaveLength(14);
   });

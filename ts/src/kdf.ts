@@ -1,5 +1,5 @@
 /**
- * Key from a password (since 0.16.0): **Argon2id**, byte for byte `regino_keys::kdf::derive` in Rust –
+ * Key from a password (since 0.18.0): **Argon2id**, byte for byte `regino_keys::kdf::derive` in Rust –
  * version 0x13, output 32 bytes, a random 16-byte salt and the parameters stored next to the wrapped key
  * (so they can be raised later). For apps without Rust (the web, Testurion): an administrator's password →
  * a key that wraps the master key.
@@ -18,8 +18,8 @@
  * - **Salt:** exactly 16 bytes (`newPasswordSalt()`, Rust `kdf::new_salt`).
  * - The UTF-8 copy of the password made here is wiped after use; the returned key is the caller's to wipe
  *   (e.g. `fill(0)` after `recordKey`).
- * Guarded by `testvectors/regino/keys-0.11.1.json` (made by Rust) and `password-key-0.16.0.json`
- * (made by TypeScript, checked by `keys/tests/password_key_0_16_0.rs`).
+ * Guarded by `testvectors/regino/keys-0.11.1.json` (made by Rust) and `password-key-0.18.0.json`
+ * (made by TypeScript, checked by `keys/tests/password_key_0_18_0.rs`).
  */
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { MAX_BACKUP_CODE_KDF, MIN_BACKUP_CODE_KDF, validBackupCodeKdf, type BackupCodeKdf } from './backupCode';

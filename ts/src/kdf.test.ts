@@ -1,7 +1,7 @@
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import rust from '../../testvectors/regino/keys-0.11.1.json';
-import v from '../../testvectors/regino/password-key-0.16.0.json';
+import v from '../../testvectors/regino/password-key-0.18.0.json';
 import { MAX_BACKUP_CODE_KDF, MIN_BACKUP_CODE_KDF } from './backupCode';
 import {
   DEFAULT_PASSWORD_KDF,
@@ -14,7 +14,7 @@ import {
   validPasswordKdf,
 } from './kdf';
 
-// Key from a password (0.16.0), byte for byte `regino_keys::kdf::derive`.
+// Key from a password (0.18.0), byte for byte `regino_keys::kdf::derive`.
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 const unhex = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (x) => parseInt(x, 16));
 const MIN = { m: 19456, t: 2, p: 1 };
@@ -35,8 +35,8 @@ describe('the same keys as Rust', () => {
     }
   });
 
-  it('gives the keys of password-key-0.16.0.json (checked by Rust in keys/tests/password_key_0_16_0.rs)', async () => {
-    expect(v.version).toBe('0.16.0');
+  it('gives the keys of password-key-0.18.0.json (checked by Rust in keys/tests/password_key_0_18_0.rs)', async () => {
+    expect(v.version).toBe('0.18.0');
     expect(v.derive).toHaveLength(7);
     for (const c of v.derive) {
       expect(hex(new TextEncoder().encode(c.password_text)), c.name).toBe(c.password);

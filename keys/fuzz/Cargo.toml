@@ -1,0 +1,46 @@
+# Fuzzing of the parsers in regino-keys (since 0.16.0, review 2026-11-18). Own workspace, not part of the
+# release build; needs nightly and cargo-fuzz: `cd keys && cargo +nightly fuzz run <target>`.
+[package]
+name = "regino-keys-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+regino-keys = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "sign"
+path = "fuzz_targets/sign.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "shamir_combine"
+path = "fuzz_targets/shamir_combine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "backup_code_parse"
+path = "fuzz_targets/backup_code_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wrap_unwrap"
+path = "fuzz_targets/wrap_unwrap.rs"
+test = false
+doc = false
+bench = false

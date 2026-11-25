@@ -299,6 +299,14 @@ fn non_finite_reals_are_rejected_on_read() {
     assert_eq!(v.all("SELECT 1.5 AS x", &[]).unwrap()[0]["x"], json!(1.5));
 }
 
+/// 0.16.0 (review 2026-11-18, F-08): text that is not valid UTF-8 is an error on read, never silently changed.
+#[test]
+fn invalid_utf8_text_is_rejected_on_read() {
+    let (_d, v) = open_tmp();
+    assert!(matches!(v.all("SELECT CAST(x'ff61' AS TEXT) AS x", &[]), Err(Error::BadValue(_))));
+    assert_eq!(v.all("SELECT CAST(x'c3a161' AS TEXT) AS x", &[]).unwrap()[0]["x"], json!("áa"));
+}
+
 /// Finding 4 of the 2026-10-22 review: `secure_delete` is a per-connection setting, so `open` must
 /// turn it on every time – read back on a fresh file and after a reopen.
 #[test]
@@ -377,4 +385,99 @@ fn secure_delete_leaves_no_deleted_text_in_a_plaintext_file() {
     assert_eq!(remains_after_delete("OFF", false), (true, false), "control: without secure_delete the text stays");
     assert_eq!(remains_after_delete("ON", false), (false, false), "secure_delete alone");
     assert_eq!(remains_after_delete("ON", true), (false, false), "secure_delete + compact steps");
+}
+
+/// 0.16.1 (Dôverník quality check 2026-11-20, B1): SQL from the app's window must not write a file
+/// outside the vault – no `ATTACH` (an attached database with an empty key is plaintext) and no
+/// `VACUUM INTO`, through `exec`, `run` and `all`. `compact` (plain `VACUUM`) still works and the
+/// limit is back afterwards.
+#[test]
+fn attach_and_vacuum_into_are_refused() {
+    let (dir, v) = open_tmp();
+    v.exec("CREATE TABLE t (x TEXT); INSERT INTO t VALUES ('tajne');").unwrap();
+    let out = dir.path().join("plain.db");
+    let q = out.to_string_lossy().replace('\'', "''");
+    let attach = format!("ATTACH DATABASE '{q}' AS x KEY ''");
+    let vacuum_into = format!("VACUUM INTO '{q}'");
+    for sql in [attach.as_str(), vacuum_into.as_str()] {
+        assert!(v.exec(sql).is_err(), "exec: {sql}");
+        assert!(v.run(sql, &[]).is_err(), "run: {sql}");
+        assert!(v.all(sql, &[]).is_err(), "all: {sql}");
+        assert!(!out.exists(), "a file was written by: {sql}");
+    }
+    v.compact().unwrap();
+    assert!(v.exec(&attach).is_err(), "ATTACH allowed again after compact");
+    assert!(v.exec(&vacuum_into).is_err(), "VACUUM INTO allowed again after compact");
+    assert!(!out.exists());
+    assert_eq!(v.all("SELECT x FROM t", &[]).unwrap()[0]["x"], json!("tajne"));
+}
+
+/// Audit validation 2026-11-25 (0.17.0): SQL through `exec`/`run`/`all` comes from the app's window and may
+/// not change the key or the cipher settings, nor turn `secure_delete` off. Before 0.17.0 `PRAGMA hexrekey`
+/// re-encrypted the file under a key of the caller's choice (the stored key no longer opened it).
+#[test]
+fn key_and_cipher_pragmas_are_refused_through_app_sql() {
+    let (dir, path) = tmp();
+    let key = Key::generate().unwrap();
+    let v = Vault::open(&path, &key).unwrap();
+    v.exec("CREATE TABLE t (x TEXT); INSERT INTO t VALUES ('tajne');").unwrap();
+    let forbidden = [
+        "PRAGMA rekey = 'attacker'",
+        "PRAGMA REKEY = 'attacker'",
+        "PRAGMA main.rekey = 'attacker'",
+        "PRAGMA hexrekey = '00'",
+        "PRAGMA textrekey = 'x'",
+        "PRAGMA key = 'x'",
+        "PRAGMA hexkey = '00'",
+        "PRAGMA textkey = 'x'",
+        "PRAGMA cipher = 'aes-128-cbc'",
+        "PRAGMA kdf_iter = 1",
+        "PRAGMA fast_kdf_iter = 1",
+        "PRAGMA rekey_cipher = 'aes-128-cbc'",
+        "PRAGMA cipher_plaintext_header_size = 32",
+        "PRAGMA cipher_memory_security = OFF",
+        "PRAGMA Cipher_Compatibility = 3",
+        "PRAGMA cipher_version = 1",
+        "PRAGMA cipher_settings",
+        "PRAGMA sqlcipher_export = 'x'",
+        "PRAGMA secure_delete = OFF",
+        "PRAGMA secure_delete = 0",
+        "PRAGMA main.secure_delete = FAST",
+    ];
+    for sql in forbidden {
+        assert!(v.exec(sql).is_err(), "exec: {sql}");
+        assert!(v.run(sql, &[]).is_err(), "run: {sql}");
+        assert!(v.all(sql, &[]).is_err(), "all: {sql}");
+        // also inside a batch: nothing after the refused statement runs
+        assert!(v.exec(&format!("INSERT INTO t VALUES ('a'); {sql}; INSERT INTO t VALUES ('b');")).is_err());
+    }
+    // still on, still the same key
+    assert_eq!(v.all("PRAGMA secure_delete", &[]).unwrap()[0]["secure_delete"], json!(1));
+    // what the apps use stays allowed (Dôverník and Gazda: migrations, checks, About screen)
+    for sql in [
+        "PRAGMA foreign_keys = OFF",
+        "PRAGMA foreign_keys = ON",
+        "PRAGMA defer_foreign_keys = ON",
+        "PRAGMA user_version = 7",
+        "PRAGMA foreign_key_check",
+        "PRAGMA table_info(t)",
+        "PRAGMA wal_checkpoint(FULL)",
+        "SELECT page_count * page_size AS n FROM pragma_page_count(), pragma_page_size()",
+        "PRAGMA cipher_version",
+        "PRAGMA cipher_provider",
+    ] {
+        v.all(sql, &[]).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    assert_eq!(v.all("PRAGMA user_version", &[]).unwrap()[0]["user_version"], json!(7));
+    // the app's own rekey still works, and afterwards the guard is back
+    let new = Key::generate().unwrap();
+    v.rekey(&new).unwrap();
+    assert!(v.exec("PRAGMA rekey = 'attacker'").is_err());
+    v.compact().unwrap();
+    drop(v);
+    assert!(matches!(Vault::open(&path, &key), Err(Error::WrongKey)));
+    let v = Vault::open(&path, &new).unwrap();
+    assert_eq!(v.all("SELECT x FROM t", &[]).unwrap()[0]["x"], json!("tajne"));
+    drop(v);
+    let _ = dir;
 }

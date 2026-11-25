@@ -22,7 +22,7 @@
 import { Point, getPublicKeyAsync, signAsync, verifyAsync } from "@noble/ed25519";
 import { equalBytes } from "./bytes";
 import { b64, checkContext, unb64 } from "./ecdh";
-import { unwrapForDevice, wrapForDevice, type WrappedGroupKey } from "./sync";
+import { unwrapForDevice, WRAP_VERSION, wrapForDevice, type WrappedGroupKey } from "./sync";
 
 export const SIGNATURE_LEN = 64;
 export const SIGNING_KEY_LEN = 32;
@@ -35,6 +35,15 @@ export const MAX_WRAPPED = 65536;
 export const MAX_VERSION = Number.MAX_SAFE_INTEGER;
 /** Version of `SignedWrappedKey`. */
 export const SIGNED_WRAP_VERSION = 1;
+/**
+ * Longest member list blob (message ‖ signature) a canonical list can have – every field at its limit and
+ * `MAX_MEMBERS` members: 1 602 216 bytes, the same as Rust `sign::MAX_MANIFEST_LEN`. Since 0.17.0 (audit
+ * validation 2026-11-25, L-06) a longer blob is refused before anything is decoded; no accepted list is longer.
+ */
+export const MAX_MANIFEST_LEN =
+  8 + (4 + 8) + (4 + MAX_CONTEXT) + 2 * (4 + 8) + 2 * (4 + 32) + (4 + 4) +
+  MAX_MEMBERS * (2 * (4 + MAX_NAME) + (4 + 1) + (4 + SIGNING_KEY_LEN) + (4 + 8) + (4 + MAX_KEY)) +
+  SIGNATURE_LEN;
 
 const enc = new TextEncoder();
 const MAGIC = enc.encode("RGN-SIG1");
@@ -305,6 +314,9 @@ export async function signedWrapForDevice(
   const who = await asSigner(signer);
   if (epoch > list.manifest.epoch) throw new Error("The epoch is above the epoch of the member list.");
   const w = await wrapForDevice(groupKey, recipientPublic, context);
+  // since 0.16.0 (review 2026-11-18, F-10): a signed key is written only with the current wrap version (v2,
+  // domain label in the AAD); reading keeps accepting what an admin signed before
+  if (w.v !== WRAP_VERSION) throw new Error("Unsupported wrapped key version.");
   const st = { context, objectId, version: epoch, manifest: list.hash, recipient: recipientPublic, wrapped: wrappedKeyBytes(w) };
   const s = await who.sign(wrapMessage(st, who.publicKey));
   return { v: SIGNED_WRAP_VERSION, id: objectId, ver: epoch, m: b64(list.hash), w, k: b64(who.publicKey), s: b64(s) };
@@ -447,10 +459,17 @@ function encodeManifest(m: Manifest, signer: Uint8Array, checkKeys: boolean): Ui
   return message("manifest", fields);
 }
 
-/** Signs a list; the blob is `message || signature` and is carried as is (the server stores it opaque). */
+/**
+ * Signs a list; the blob is `message || signature` and is carried as is (the server stores it opaque).
+ * Since 0.16.0 two members with the same non-empty `seal` are refused.
+ */
 export async function signManifest(signer: Signer | Uint8Array, manifest: Manifest): Promise<Uint8Array> {
   const who = await asSigner(signer);
   const msg = manifestMessage(manifest, who.publicKey);
+  // since 0.16.0 (review 2026-11-18, F-07), only when a list is made: no two members share a non-empty seal.
+  // Lists signed before are read as they are (openManifest); the message bytes are unchanged.
+  const seals = manifest.members.filter((x) => x.seal.length > 0).map((x) => b64(x.seal));
+  if (new Set(seals).size !== seals.length) throw new Error("Duplicate member seal key.");
   return concat([msg, await who.sign(msg)]);
 }
 
@@ -533,7 +552,10 @@ class Reader {
 export async function openManifest(blob: Uint8Array): Promise<AcceptedManifest> {
   let manifest: Manifest;
   let signer: Uint8Array;
-  const msg = blob instanceof Uint8Array && blob.length >= MAGIC.length + SIGNATURE_LEN ? blob.subarray(0, blob.length - SIGNATURE_LEN) : null;
+  const msg =
+    blob instanceof Uint8Array && blob.length >= MAGIC.length + SIGNATURE_LEN && blob.length <= MAX_MANIFEST_LEN
+      ? blob.subarray(0, blob.length - SIGNATURE_LEN)
+      : null;
   try {
     if (!msg || !equalBytes(msg.subarray(0, MAGIC.length), MAGIC)) throw new Error();
     const r = new Reader(msg.subarray(MAGIC.length));
@@ -753,6 +775,45 @@ export async function verifyManifestChainFromAnchor(
   if (opts.requireAnchorOnLatest === true && !(await latestConfirmed(out[out.length - 1]!, [...anchors, ...signers], opts.confirmations ?? [])))
     throw new Error("The signer of the member list is not trusted (the latest version is not signed or confirmed by an anchor).");
   return out;
+}
+
+/**
+ * The member list for `openWriteKey` (since 0.16.0): every blob from version 1, the scope, the anchors (they
+ * anchor the chain and may also give keys, as in `openSignedWrap`) and the chain options –
+ * `requireAnchorOnLatest` is always on.
+ */
+export interface WriteKeyChain extends Omit<ChainOptions, "requireAnchorOnLatest"> {
+  blobs: readonly Uint8Array[];
+  scope: string;
+  anchors: readonly Uint8Array[];
+}
+
+/**
+ * Since 0.16.0: opens the key an app **seals new items with** (the write key), with every check that is
+ * optional elsewhere always on (the same as Rust `verify_write_key`):
+ * - the chain is verified from version 1 with `requireAnchorOnLatest` (the latest version signed or
+ *   confirmed by an anchor or one of `signers`), so a removed admin cannot continue an older version;
+ * - the key must be of the latest list's own epoch (`requireCurrentEpoch`), so a genuine key of an earlier
+ *   epoch (that a removed member still knows) is not taken as the current one;
+ * - the key must be for the member `recipientId` of that list, wrapped for its seal.
+ * Returns the key, the signer, the epoch and the latest accepted list; throws otherwise. Keys of earlier
+ * epochs for reading older items are opened with `openSignedWrap` as before; defaults there are unchanged.
+ */
+export async function openWriteKey(
+  signed: SignedWrappedKey,
+  devicePrivate: CryptoKey,
+  devicePublic: Uint8Array,
+  context: string,
+  objectId: string,
+  recipientId: string,
+  chain: WriteKeyChain,
+): Promise<{ groupKey: Uint8Array; signer: Uint8Array; epoch: number; list: AcceptedManifest }> {
+  if (typeof recipientId !== "string" || recipientId.length === 0) throw new Error("The recipient id is required.");
+  const { blobs, scope, anchors, ...opts } = chain;
+  const lists = await verifyManifestChainFromAnchor(blobs, scope, anchors, { ...opts, requireAnchorOnLatest: true });
+  const list = lists[lists.length - 1]!;
+  const key = await openSignedWrap(signed, devicePrivate, devicePublic, context, objectId, list, anchors, { recipientId, requireCurrentEpoch: true });
+  return { ...key, list };
 }
 
 /** The latest version is signed by one of `keys`, or one of them confirmed it (one check per key). */

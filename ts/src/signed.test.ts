@@ -1,6 +1,7 @@
 import { getPublicKeyAsync, signAsync, utils } from '@noble/ed25519';
 import { describe, expect, it } from 'vitest';
 import ed25519 from '../../testvectors/wycheproof/ed25519_test.json';
+import signing130 from '../../testvectors/regino/signing-0.13.0.json';
 import * as signed from './signed';
 import {
   certifiedKeys,
@@ -9,6 +10,7 @@ import {
   verifySignature,
   verifyToken,
   verifyWithKeys,
+  verifyWithKeysAt,
   type Payload,
 } from './signed';
 
@@ -133,6 +135,26 @@ describe('signed tokens', () => {
     expect((await verifyWithKeys(await dev({ v: 7, typ: 'other' }), keys, expect_, AT))?.v).toBe(7);
   });
 
+  // 0.17.0 (audit validation 2026-11-25, L-05): the time is a required argument of verifyWithKeysAt
+  it('verifyWithKeysAt: time required, null only on purpose', async () => {
+    const { product, roots, cert } = await setup();
+    const keys = await certifiedKeys([{ kid: 'demo-2026', cert }], roots, AT);
+    const expect_ = { prefix: 'DM', product: 'demo', use: 'licence' };
+    const dev = (p: Payload) => sign('DM', { v: 1, typ: 'dev', kid: 'demo-2026', product: 'demo', ...p }, product.secret);
+    const expired = await dev({ exp: AT - 1 });
+    expect(await verifyWithKeysAt(expired, keys, expect_, AT)).toBeNull();
+    expect(await verifyWithKeysAt(await dev({ nbf: AT + 1 }), keys, expect_, AT)).toBeNull();
+    expect(await verifyWithKeysAt(await dev({ nbf: AT, exp: AT }), keys, expect_, AT)).not.toBeNull();
+    // null: the caller checks time itself (licence tokens), as verifyWithKeys without `at`
+    expect(await verifyWithKeysAt(expired, keys, expect_, null)).not.toBeNull();
+    expect(await verifyWithKeys(expired, keys, expect_, null)).not.toBeNull();
+    for (const bad of [AT + 0.5, NaN, -1, Infinity, '1' as unknown as number, undefined as unknown as number]) {
+      await expect(verifyWithKeysAt(expired, keys, expect_, bad), String(bad)).rejects.toThrow('whole seconds');
+    }
+    // a wrong signature is still null, whatever the time
+    expect(await verifyWithKeysAt(expired.slice(0, -2) + 'AA', keys, expect_, AT)).toBeNull();
+  });
+
   it('certificate chain: root → product key → token', async () => {
     const { product, roots, cert } = await setup();
     const key = await verifyCertificate(cert, roots, AT);
@@ -242,5 +264,12 @@ describe('signed tokens', () => {
       }
     }
     expect(n).toBe(151);
+  });
+  it('0.16.0 (review 2026-11-18, F-03): the same strict verdicts as signing.ts – torsion in A or R is refused', async () => {
+    const raw = (signing130 as unknown as { raw: { case: string; public: string; message: string; signature: string; valid: boolean; noble_cofactored: boolean }[] }).raw;
+    for (const t of raw) expect(await verifySignature(hex(t.signature), hex(t.message), hex(t.public)), t.case).toBe(t.valid);
+    // the cases the library's own check would accept and the strict check refuses
+    expect(raw.filter((t) => t.noble_cofactored && !t.valid).map((t) => t.case)).toEqual(['R with a torsion component', 'public key with a torsion component']);
+    expect(await verifySignature(new Uint8Array(63), hex(raw[0]!.message), hex(raw[0]!.public))).toBe(false);
   });
 });

@@ -3,8 +3,8 @@ import { equalBytes } from './bytes';
 /**
  * Splitting a 32-byte key into `shares` shares of which any `threshold` suffice (e.g. 2 of 3: paper,
  * a person, a notary) – Shamir secret sharing over GF(256), **byte for byte the same as Rust**
- * `regino_keys::shamir` (since 0.16.0): shares made here combine in Rust and the other way round
- * (fixed vectors `testvectors/regino/keys-0.11.1.json` made by Rust, `shamir-0.16.0.json` made here).
+ * `regino_keys::shamir` (since 0.18.0): shares made here combine in Rust and the other way round
+ * (fixed vectors `testvectors/regino/keys-0.11.1.json` made by Rust, `shamir-0.18.0.json` made here).
  *
  * Share format (46 bytes): `"RGK1" | threshold(1) | fingerprint(8) | x(1) | y(32)`.
  * - fingerprint = the first 8 bytes of SHA-256(`regino-keys/shamir/v1` ‖ key): a damaged share or
@@ -174,7 +174,7 @@ export async function combineShares(
 }
 
 /*
- * A share as text for its own QR code or for typing (since 0.16.0, TypeScript only – Rust works with
+ * A share as text for its own QR code or for typing (since 0.18.0, TypeScript only – Rust works with
  * the bytes): "RGS1:" + base32 (A–Z, 2–7, QR alphanumeric mode) of [share(46) | 2 bytes of SHA-256(share)],
  * 77 characters after the prefix. The check bytes catch a misread or mistyped share before combining.
  */

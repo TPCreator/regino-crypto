@@ -1,5 +1,5 @@
-//! Argon2id key from a password made by the TypeScript side (0.16.0, `ts/src/kdf.ts` `passwordKey`,
-//! `testvectors/regino/password-key-0.16.0.json`): `kdf::derive` gives the same key byte for byte, and the
+//! Argon2id key from a password made by the TypeScript side (0.18.0, `ts/src/kdf.ts` `passwordKey`,
+//! `testvectors/regino/password-key-0.18.0.json`): `kdf::derive` gives the same key byte for byte, and the
 //! parameters TypeScript refuses are refused here too (before any work). The other direction (Rust keys of
 //! `keys-0.11.1.json` reproduced in TypeScript) is `ts/src/kdf.test.ts`.
 
@@ -12,7 +12,7 @@ fn hex(v: &Value) -> Vec<u8> {
 }
 
 fn vectors() -> Value {
-    serde_json::from_str(include_str!("../../testvectors/regino/password-key-0.16.0.json")).expect("JSON")
+    serde_json::from_str(include_str!("../../testvectors/regino/password-key-0.18.0.json")).expect("JSON")
 }
 
 fn params(c: &Value) -> kdf::KdfParams {
@@ -23,7 +23,7 @@ fn params(c: &Value) -> kdf::KdfParams {
 #[test]
 fn typescript_password_keys_derive_in_rust() {
     let doc = vectors();
-    assert_eq!(doc["version"], "0.16.0");
+    assert_eq!(doc["version"], "0.18.0");
     let cases = doc["derive"].as_array().unwrap();
     assert_eq!(cases.len(), 7);
     for c in cases {

@@ -1,6 +1,6 @@
 {
-  "version": "0.16.0",
-  "note": "Shamir key shares made by the TypeScript side (ts/src/shamir.ts); combined by Rust in keys/tests/shamir_0_16_0.rs. Share = \"RGK1\" | threshold | fingerprint(8) | x | y(32). The keys are test values only.",
+  "version": "0.18.0",
+  "note": "Shamir key shares made by the TypeScript side (ts/src/shamir.ts); combined by Rust in keys/tests/shamir_0_18_0.rs. Share = \"RGK1\" | threshold | fingerprint(8) | x | y(32). The keys are test values only.",
   "split": [
     {
       "name": "2 of 3",

@@ -122,5 +122,8 @@ fn shamir_shares_from_0_11_1_combine() {
             }
         }
         assert!(checked >= 4, "{threshold}-of-{n}: {checked} subsets");
+        // 0.16.0: the same shares in wiped buffers
+        let wiped: Vec<zeroize::Zeroizing<Vec<u8>>> = shares.iter().cloned().map(zeroize::Zeroizing::new).collect();
+        assert_eq!(shamir::combine_zeroizing(&wiped).unwrap(), expected);
     }
 }

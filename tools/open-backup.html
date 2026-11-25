@@ -23,7 +23,7 @@
 <h1>Open a backup independently</h1>
 <p lang="sk" class="sk">Slovensky: Otvorte zálohu svojím obnovovacím kódom (12 alebo 24 slov – slovenských alebo anglických –, 16-znakový kód zálohy alebo QR kód). Všetko prebieha len vo vašom prehliadači.</p>
 <p>This file opens an encrypted backup from an app that uses the regino-crypto core, using your recovery code (12 or 24 words – Slovak or English –, a 16-character backup code, or the QR code from the recovery sheet). It runs only in your browser – <b>nothing is sent to the internet</b> (you can open it offline too).</p>
-<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.16.0.</small></p>
+<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.17.0.</small></p>
 <label for="file">Backup file</label>
 <input id="file" type="file" accept=".json,application/json,*/*">
 <label for="words">Recovery code – 12 or 24 words, or a 16-character backup code</label>
@@ -11338,19 +11338,33 @@
     for (const c of list) if (!NAME.test(c)) throw new Error("Invalid chunk name.");
     return { list, digest: b64(new Uint8Array(await crypto.subtle.digest("SHA-256", enc3.encode(list.join("\n"))))) };
   }
+  var MAX_PAYLOAD_DEPTH = 64;
+  function safeFileName(name) {
+    const base = name.split(/[\\/]/).pop();
+    const clean2 = base.replace(/[\u0000-\u001f\u007f-\u009f<>:"|?*\u202a-\u202e\u2066-\u2069]/g, "_").replace(/^[.\s]+|[.\s]+$/g, "");
+    const short = [...clean2].slice(0, 120).join("");
+    return short || "file";
+  }
+  var MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$/i;
   function findChunkedFiles(payload) {
     const out = [];
-    const walk = (v) => {
-      if (Array.isArray(v)) return v.forEach(walk);
+    const walk = (v, depth) => {
+      if (depth > MAX_PAYLOAD_DEPTH) throw new Error("The backup content is nested too deeply.");
+      if (Array.isArray(v)) return v.forEach((x) => walk(x, depth + 1));
       if (!v || typeof v !== "object") return;
       const o = v;
       if (Array.isArray(o.chunks) && o.chunks.length && o.chunks.every((c) => typeof c === "string" && NAME.test(c))) {
-        out.push({ name: typeof o.name === "string" && o.name ? o.name : "file", mime: typeof o.mime === "string" ? o.mime : void 0, size: typeof o.size === "number" ? o.size : void 0, chunks: o.chunks });
+        out.push({
+          name: typeof o.name === "string" ? safeFileName(o.name) : "file",
+          mime: typeof o.mime === "string" && MIME.test(o.mime) ? o.mime : void 0,
+          size: typeof o.size === "number" ? o.size : void 0,
+          chunks: o.chunks
+        });
         return;
       }
-      Object.values(o).forEach(walk);
+      Object.values(o).forEach((x) => walk(x, depth + 1));
     };
-    walk(payload);
+    walk(payload, 0);
     return out;
   }
   async function assembleChunkedFile(keys, file, read) {

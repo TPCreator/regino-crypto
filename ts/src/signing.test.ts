@@ -171,7 +171,7 @@ describe('signed wrapped keys', () => {
     const dev = await newDeviceKeys();
     const devPub = await publicKeyBytes(dev.publicKey);
     const [x, y, mgmt] = [newSigningKey(), newSigningKey(), newSigningKey()];
-    const m = async (id: string, admin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin, sign: await signingPublicKey(k), seal: devPub, sealVersion: 1 });
+    const m = async (id: string, admin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin, sign: await signingPublicKey(k), seal: Uint8Array.of(...devPub, ...(await signingPublicKey(k))), sealVersion: 1 });
     const sc = 'demo|case|h';
     const one = await verifyManifest(await signManifest(mgmt, { scope: sc, version: 1, epoch: 3, prev: new Uint8Array(32), members: [await m('x', true, x), await m('y', false, y)] }), sc, [await signingPublicKey(mgmt)]);
     const old = newGroupKey();
@@ -231,7 +231,7 @@ describe('signed wrapped keys', () => {
     const devPub = await publicKeyBytes(dev.publicKey);
     const groupKey = newGroupKey();
     const [admin, member, mgmt] = [newSigningKey(), newSigningKey(), newSigningKey()];
-    const m = async (id: string, isAdmin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin: isAdmin, sign: await signingPublicKey(k), seal: devPub, sealVersion: 1 });
+    const m = async (id: string, isAdmin: boolean, k: Uint8Array): Promise<Member> => ({ id, role: 'r', admin: isAdmin, sign: await signingPublicKey(k), seal: Uint8Array.of(...devPub, ...(await signingPublicKey(k))), sealVersion: 1 });
     const sc = 'demo|case|1';
     const one = await verifyManifest(await signManifest(mgmt, { scope: sc, version: 1, epoch: 4, prev: new Uint8Array(32), members: [await m('a', true, admin), await m('b', false, member)] }), sc, [await signingPublicKey(mgmt)]);
     const ctx = 'demo|case|1|key|4';

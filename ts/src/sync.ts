@@ -81,6 +81,11 @@ export interface SealedRecord {
 const recordAad = (context: string) =>
   enc.encode(`sync record v${SYNC_VERSION}|${context}`);
 
+/**
+ * Seals a record with the record key (from the group key), bound to `context`.
+ * Limit (AES-256-GCM with a random 96-bit nonce under one key): at most 2^32 seals per key (NIST SP 800-38D),
+ * far above the expected use; the app rotates the key (a new epoch) long before.
+ */
 export async function sealRecord(
   key: CryptoKey,
   context: string,
