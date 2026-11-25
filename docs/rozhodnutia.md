@@ -2,6 +2,11 @@
 
 Rozhodnutia Tomáša k jadru šifrovania (novšie hore).
 
+- **2026-11-25 – PIN nikde nie je zdroj kľúča: kľúč zariadenia + krátky PIN a passkey PRF v jadre (0.20.0).** Tomáš
+  2026-11-25 v hlavnej session Žiačika k hláseniu DysPro: „Toto preco neriesime?“ (Ziacik `docs/rozhodnutia.md`
+  2026-11-25) – do jadra prihlásenie cez prístupový kľúč (passkey, WebAuthn PRF) a hotová funkcia „kľúč zariadenia +
+  krátky PIN“ podľa app-core `docs/deviceVault.md`; app-core ju potom použije namiesto vlastného skladania.
+  `ts/src/deviceVault.ts`, `docs/DEVICE-VAULT.md`, `AUDIT.md` § 4.11.
 - **2026-11-25 – Body § 7 validácie: Testurion na `main` jadra (0.18.0), záloha v4 pripraviť v jadre.** Tomáš 2026-11-25
   v hlavnej session Žiačika: „4 nechcem, ostatne chcem“ (Ziacik `docs/rozhodnutia.md` 2026-11-25) – k § 7
   `docs/validacia-auditu-2026-11-25.md`. Pre jadro: (3) dokončiť PR #40 (Shamir GF(256) a `passwordKey` v TypeScripte)

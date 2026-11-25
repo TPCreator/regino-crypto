@@ -1,0 +1,82 @@
+{
+  "version": "0.20.0",
+  "description": "Device key and device vault (regino-crypto 0.20.0, ts/src/deviceVault.ts). Device key = HKDF-SHA256(secret, salt = none, info = \"<app> device-key v1 <method>\") – the same as Rust regino_keys::device::device_key (keys/tests/device_vault_0_20_0.rs). Envelopes made by TypeScript with the device key of keys[0]; ts/src/deviceVault.test.ts opens them. Test values only.",
+  "keys": [
+    {
+      "name": "windows-hello, 256-byte signature",
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "app": "demo",
+      "method": "windows-hello",
+      "key": "798a6ee2d26b83644e682f57ed46bdbd4007246b5ae0ac90542fa54a68a92e32"
+    },
+    {
+      "name": "passkey PRF output",
+      "secret": "030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc",
+      "app": "dyspro",
+      "method": "passkey-prf",
+      "key": "db5d70f6ce9df5c9460e52e601a7b618b163f675584319c1d758968e4cbd079a"
+    },
+    {
+      "name": "OS keystore secret",
+      "secret": "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0",
+      "app": "ziacik",
+      "method": "os-keystore",
+      "key": "b705149fe619db5e8d6e038b7ed6e50145131acd2352781aa1e8fad2c469995c"
+    }
+  ],
+  "prf_inputs": [
+    {
+      "app": "dyspro",
+      "label": "device-vault",
+      "input": "24e3038b0396fac0c6a992f9595f70f8099218f25136b2f199310201c8abe5b3"
+    },
+    {
+      "app": "ziacik",
+      "label": "parent-pin",
+      "input": "54d2d5dbdae17f14239e941a261720079508b96827908349ccf79ff8f69871d8"
+    }
+  ],
+  "envelopes": [
+    {
+      "mode": "none",
+      "envelope": {
+        "format": "regino-device-vault",
+        "version": 1,
+        "app": "demo",
+        "mode": "none",
+        "nonce": "vihdzw9r+HbsUCCY",
+        "ciphertext": "Zso054bDBeDuRkBjh37RPNb9L7ufZPJvtClAu8DlZsLRH1SMcGdcgW+Xq6G/WuDxYoKaL2dSQ+mkw4ee8l/lQiJOdx0="
+      }
+    },
+    {
+      "mode": "gate",
+      "pin": "4821",
+      "envelope": {
+        "format": "regino-device-vault",
+        "version": 1,
+        "app": "demo",
+        "mode": "gate",
+        "nonce": "Q06xo5BkpiJPERS5",
+        "ciphertext": "wJvdmU9nW8wn1LowTUmnHsEr5Wb1ZH7JRCtv3xpHxDerT0TktJfM3AyjLDBMZQHsvf9WlHsEnrO+BphW3CDS+uQaCM5gQ4LQpR0kBRRwmeErVlX0iQToBkz0aLJHcZH4Pi9bx3uU2ynE7eYpsBPyifvuMw8tKqxqNIKlfQRCP0C4o4B/KipF5ctyHa0qesyWX5aIwqO6ePP0Yrcr3gbFghRvXxgsRmep5LmE7tlXdnPktaUK6NPgywrAAnA="
+      }
+    },
+    {
+      "mode": "factor",
+      "pin": "48213907",
+      "kdf": {
+        "m": 19456,
+        "t": 2,
+        "p": 1
+      },
+      "envelope": {
+        "format": "regino-device-vault",
+        "version": 1,
+        "app": "demo",
+        "mode": "factor",
+        "nonce": "GTbnEuGit5+b/N8B",
+        "ciphertext": "GjPdOjodoRga4ohdqOKoBXAzhxFGVySzGzFQmaqqDCiZ+F0PIS8HnhGLBE6ei1bO/FojZMR53AkwnPglklxsSJ8Vv1oiwLW5KKxgkev/Z8P2rA0yDXREvFLRwtDHIgYdG4XpohULg/BgScTulJWVYcXdazJq/dUdOUfqtvwwBuw/156GU3H4SRm2cpv0W4Y5t8CfN81qAHClcS9b2mlrui4kJX08ItwXMmBRWsnA0aC2wvBdBR6dfAkYHwYiLAQfBNUWUAIO"
+      }
+    }
+  ],
+  "data_key": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
+}
