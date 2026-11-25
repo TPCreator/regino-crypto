@@ -23,6 +23,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Argon2id of up to 128 MiB in pure JavaScript: seconds on a busy CI runner (as backupCode.test.ts)
+vi.setConfig({ testTimeout: 60_000 });
+
 describe('the same keys as Rust', () => {
   it('reproduces the Argon2id keys made by Rust 0.11.1 (keys-0.11.1.json)', async () => {
     expect(rust.kdf).toHaveLength(2);
