@@ -627,6 +627,7 @@ dependencies = [
  "getrandom",
  "hkdf",
  "hmac",
+ "rand_core",
  "serde_json",
  "sha2",
  "subtle",

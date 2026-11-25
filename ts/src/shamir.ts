@@ -220,27 +220,28 @@ export async function shareFromQrText(text: string): Promise<Uint8Array | null> 
   const body = t.slice(SHARE_QR_PREFIX.length);
   if (body.length !== QR_CHARS) return null;
   const raw = new Uint8Array(QR_BYTES);
-  let acc = 0;
-  let bits = 0;
-  let n = 0;
-  for (const ch of body) {
-    const v = B32.indexOf(ch);
-    if (v < 0) return null;
-    acc = ((acc << 5) | v) & 0xfff;
-    bits += 5;
-    if (bits >= 8) {
-      bits -= 8;
-      raw[n++] = (acc >> bits) & 0xff; // 77 characters = 385 bits: exactly 48 bytes + 1 bit
+  try {
+    let acc = 0;
+    let bits = 0;
+    let n = 0;
+    for (const ch of body) {
+      const v = B32.indexOf(ch);
+      if (v < 0) return null;
+      acc = ((acc << 5) | v) & 0xfff;
+      bits += 5;
+      if (bits >= 8) {
+        bits -= 8;
+        raw[n++] = (acc >> bits) & 0xff; // 77 characters = 385 bits: exactly 48 bytes + 1 bit
+      }
     }
-  }
-  // one text per share: the padding bits after the last byte must be zero
-  if (acc & ((1 << bits) - 1)) return null;
-  const share = raw.slice(0, SHAMIR_SHARE_LENGTH);
-  const ok = shareInfo(share) !== null && equalBytes(await check2(share), raw.subarray(SHAMIR_SHARE_LENGTH));
-  raw.fill(0);
-  if (!ok) {
+    // one text per share: the padding bits after the last byte must be zero
+    if (acc & ((1 << bits) - 1)) return null;
+    const share = raw.slice(0, SHAMIR_SHARE_LENGTH);
+    if (shareInfo(share) !== null && equalBytes(await check2(share), raw.subarray(SHAMIR_SHARE_LENGTH))) return share;
     share.fill(0);
     return null;
+  } finally {
+    // the decoded bytes are a share: wiped on every path, also when a later character is refused (since 0.18.0)
+    raw.fill(0);
   }
-  return share;
 }

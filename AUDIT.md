@@ -344,7 +344,13 @@ tasks for the apps in [`docs/plan-aplikacie-2026-11-25.md`](docs/plan-aplikacie-
 
 **Why:** apps without Rust (the web, Testurion) need to split an organisation's backup key into shares
 (e.g. 2 of 3: two people of the organisation and a sealed envelope) and put it together again, so that a
-recovery never depends on one person. Until 0.15.1 only Rust (`regino_keys::shamir`) could do it.
+recovery never depends on one person. Until 0.17.0 only Rust (`regino_keys::shamir`) could do it.
+
+**History (V-03 of the audit validation, `docs/validacia-auditu-2026-11-25.md`):** written on 2026-11-17 in PR #40
+(branch `claude/ts-shamir`, `abf2028`) and labelled "0.16.0" there, but not merged – the real 0.16.0 is `c14df21`.
+Testurion pinned that unmerged commit. On 2026-11-25 (decision in `docs/rozhodnutia.md`) the branch was finished on
+top of 0.17.0 and merged as **0.18.0**: vectors renamed to 0.18.0, a deterministic cross test (same input → the
+same shares in both languages), a share decoded from text is wiped on every path, a robustness test.
 
 **What was added** (`ts/src/shamir.ts`, exported from `@regino/crypto`):
 
@@ -383,6 +389,18 @@ recovery never depends on one person. Until 0.15.1 only Rust (`regino_keys::sham
   QR texts. `keys/tests/shamir_0_18_0.rs` combines every subset in Rust, checks every refused case against
   `shamir::combine`, and shows that a share of a fresh Rust split of the same key does not fit a TypeScript
   share (same header, other coefficients → `BadShares`).
+- **Same input, same shares (since 0.18.0):** `deterministic` in `shamir-0.18.0.json` gives the random coefficients
+  (per key byte, highest degree first) for 2 of 3, 3 of 5, 2 of 2 with zero coefficients, 5 of 7 and 255 of 255.
+  TypeScript (`splitKey` with `crypto.getRandomValues` returning them) and Rust (`shamir::tests::
+  deterministic_shares_match_typescript`: `blahaj::Sharks::dealer_rng` with a source returning them, through the
+  same `encode` that `split_zeroizing` uses) write **exactly the same 46-byte shares**, and every coefficient is used
+  once. This pins the order in which `blahaj` 0.7 draws coefficients (`Uniform::new_inclusive(0, 255)` of `u8` =
+  the low byte of one `next_u32` in `rand` 0.10): a `blahaj` or `rand` update that changed it fails this test.
+  New dev-dependency `rand_core` 0.10 for the test source (already in `Cargo.lock` through `blahaj`).
+- **Robustness:** 2000 random byte changes of a valid 3-of-5 set never throw and never give a wrong key (TypeScript);
+  Rust `shamir::combine` keeps its fuzz target `shamir_combine` (`keys/fuzz`).
+- **Wiping (since 0.18.0):** `shareFromQrText` wipes the decoded bytes on every path (before, a text refused at a
+  later character left the bytes decoded so far in memory until garbage collection).
 
 ### 4.9 Key from a password in TypeScript (0.18.0)
 

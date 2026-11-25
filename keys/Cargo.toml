@@ -23,3 +23,5 @@ ed25519-dalek = "=3.0.0"
 
 [dev-dependencies]
 serde_json = "1"
+# only the traits for a test source with given Shamir coefficients (`shamir::tests`); already in Cargo.lock via blahaj/rand
+rand_core = "0.10"

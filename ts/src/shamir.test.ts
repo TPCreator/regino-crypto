@@ -113,6 +113,65 @@ describe('shared vectors made by TypeScript (shamir-0.18.0.json, combined by Rus
   });
 });
 
+describe('same input, same shares as Rust (shamir-0.18.0.json, deterministic)', () => {
+  // The random coefficients are given; Rust `shamir::tests::deterministic_shares_match_typescript` feeds the same
+  // bytes to blahaj `dealer_rng` and must write exactly these shares.
+  it.each(v.deterministic.map((c) => [c.name, c] as const))('%s', async (_, c) => {
+    const coefficients = unhex(c.coefficients);
+    expect(coefficients.length).toBe(32 * (c.threshold - 1));
+    let calls = 0;
+    vi.spyOn(crypto, 'getRandomValues').mockImplementation(<T extends ArrayBufferView | null>(a: T): T => {
+      calls++;
+      (a as unknown as Uint8Array).set(coefficients);
+      return a;
+    });
+    const shares = await splitKey(unhex(c.key), c.threshold, c.count);
+    expect(calls).toBe(1);
+    expect(shares.map(hex)).toEqual(c.shares);
+    vi.restoreAllMocks();
+    const t = c.threshold;
+    const first = await combineShares(shares.slice(0, t));
+    const last = await combineShares(shares.slice(-t));
+    expect(first.ok && hex(first.key)).toBe(c.key);
+    expect(last.ok && hex(last.key)).toBe(c.key);
+    expect(await combineShares(shares.slice(0, t - 1))).toEqual({
+      ok: false,
+      error: { code: 'not-enough-shares', threshold: t, count: t - 1 },
+    });
+  });
+
+  it('cases: 2 of 3, 3 of 5, zero coefficients, 5 of 7, 255 of 255', () => {
+    expect(v.deterministic.map((c) => [c.threshold, c.count])).toEqual([
+      [2, 3],
+      [3, 5],
+      [2, 2],
+      [5, 7],
+      [255, 255],
+    ]);
+    // zero coefficients: every y is the key itself
+    const z = v.deterministic[2] as (typeof v.deterministic)[number];
+    for (const s of z.shares) expect(s.slice(28)).toBe(z.key);
+  });
+});
+
+describe('robustness: changed shares never give a wrong key and never throw', () => {
+  it('2000 random byte changes of a valid 3-of-5 set', async () => {
+    const key = randomKey();
+    const shares = await splitKey(key, 3, 5);
+    const want = hex(key);
+    for (let n = 0; n < 2000; n++) {
+      const set = shares.slice(0, 3 + (n % 3)).map((s) => s.slice());
+      const r = crypto.getRandomValues(new Uint8Array(4));
+      const victim = set[(r[0] as number) % set.length] as Uint8Array;
+      const at = (r[1] as number) % SHAMIR_SHARE_LENGTH;
+      victim[at] = (victim[at] as number) ^ ((r[2] as number) | 1);
+      const out = await combineShares(set);
+      if (out.ok) expect(hex(out.key)).toBe(want); // never a wrong key
+      else expect(['format', 'different-keys', 'duplicate-x', 'not-enough-shares', 'damaged']).toContain(out.error.code);
+    }
+  });
+});
+
 describe('splitKey', () => {
   it('header: RGK1, threshold, fingerprint = SHA-256("regino-keys/shamir/v1" ‖ key)[..8], x = 1…n', async () => {
     const key = randomKey();
