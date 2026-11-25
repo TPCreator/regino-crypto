@@ -238,8 +238,65 @@ export async function backupCodeBase(secret: Uint8Array, app: string): Promise<U
  * (one-way, independent of the backup key, which uses a random salt), but whoever has it can test
  * guesses of the code offline at Argon2id cost – the server keeps it like a password hash and **must
  * limit the number of attempts** of anyone who asks by id (`AUDIT.md`, question 20).
+ * For backups of version 3. The fixed salt of the application lets one guess test the code against every id
+ * of the application at once and the cost is always the default (audit F-02): new apps use
+ * `backupIdForServer` with the parameters of a version-4 backup.
  * Same as `regino_keys::backup_code::backup_code_id`.
  */
 export async function backupCodeId(secret: Uint8Array, app: string): Promise<Uint8Array> {
   return hkdf32(await backupCodeBase(secret, app), `${app} backup-code id v1`);
+}
+
+/**
+ * Salt and Argon2id parameters of a **version-4** backup (since 0.19.0, audit F-02): stored in plain in its
+ * header (not secret). The backup key, the keys of its chunks and the id for a server all come from one
+ * Argon2id(code, `salt`, `kdf`), so they cost what the header says and differ between users (a random salt,
+ * not the fixed salt of the application). Backups that share chunks share these parameters: the app takes them
+ * from its previous backup (`backupCodeParamsOf`) or keeps the ones of `newBackupCodeParams`.
+ */
+export interface BackupCodeParams {
+  /** 16 random bytes */
+  salt: Uint8Array;
+  kdf: BackupCodeKdf;
+}
+
+/** Fresh parameters: a random 16-byte salt and `kdf` (default `DEFAULT_BACKUP_CODE_KDF`, within the bounds). */
+export function newBackupCodeParams(kdf: Readonly<BackupCodeKdf> = DEFAULT_BACKUP_CODE_KDF): BackupCodeParams {
+  const k = kdf && typeof kdf === 'object' ? { m: kdf.m, t: kdf.t, p: kdf.p } : kdf;
+  if (!validBackupCodeKdf(k)) throw new Error('Argon2id parameters out of bounds.');
+  return { salt: crypto.getRandomValues(new Uint8Array(16)), kdf: k };
+}
+
+/**
+ * (internal) A checked copy of parameters: a 16-byte salt and bounds (`max`, default `MAX_BACKUP_CODE_KDF`) –
+ * so the values checked are the values used.
+ */
+export function checkBackupCodeParams(
+  params: unknown,
+  max: Readonly<BackupCodeKdf & { work: number }> = MAX_BACKUP_CODE_KDF,
+): BackupCodeParams {
+  const q = params as Partial<BackupCodeParams> | null;
+  const salt = q && typeof q === 'object' ? q.salt : undefined;
+  if (!(salt instanceof Uint8Array) || salt.length !== 16) throw new Error('The salt must have 16 bytes.');
+  const kdf = q?.kdf && typeof q.kdf === 'object' ? { m: q.kdf.m, t: q.kdf.t, p: q.kdf.p } : undefined;
+  if (!validBackupCodeKdf(kdf, max)) throw new Error('Argon2id parameters out of bounds.');
+  return { salt: salt.slice(), kdf };
+}
+
+/** (internal) Version 4: Argon2id(secret, params.salt, params.kdf) – the one input of every v4 key. */
+export async function backupCodeBaseV4(secret: Uint8Array, params: BackupCodeParams): Promise<Uint8Array> {
+  const q = checkBackupCodeParams(params);
+  return backupCodeStretch(secret, q.salt, q.kdf);
+}
+
+/**
+ * Id for a server of the backups made with `params` (since 0.19.0, version 4): 32 bytes,
+ * HKDF-SHA256(Argon2id(code, params.salt, params.kdf), `<app> backup-code id v2`). Unlike `backupCodeId` it
+ * needs the salt of the backups (it is in their header), so it cannot be computed from the code alone, and a
+ * guess tested against it costs the Argon2id of the header and hits only this user's id. The server still
+ * keeps it like a password hash and limits attempts. Same as `regino_keys::backup_code::backup_id`.
+ */
+export async function backupIdForServer(secret: Uint8Array, app: string, params: BackupCodeParams): Promise<Uint8Array> {
+  checkApp(app);
+  return hkdf32(await backupCodeBaseV4(secret, params), `${app} backup-code id v2`);
 }

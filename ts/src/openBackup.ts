@@ -1,4 +1,4 @@
-import { decryptBackup } from './backup';
+import { backupCodeParamsOf, decryptBackup } from './backup';
 import { backupChunkKeys, findChunkedFiles, type BackupChunkKeys, type ChunkedFile } from './backupChunks';
 import { BACKUP_CODE_SECRET } from './backup';
 import { looksLikeBackupCode, parseBackupCode, type BackupCodeError } from './backupCode';
@@ -7,7 +7,8 @@ import { wordsToSecretAuto } from './recovery';
 /**
  * Independent backup opening: file contents + recovery code (12 or 24 words, or the QR text) or a
  * 16-character backup code (since 0.15.0) → data. The header says which kind the backup needs
- * (version 3 = backup code); input of the other kind gets a message saying so.
+ * (versions 3 and 4 = backup code); input of the other kind gets a message saying so. Version 4 (since 0.19.0)
+ * takes the chunk keys from the salt and parameters in its header.
  * The word list (Slovak or English) is recognised from the words (`wordsToSecretAuto`); words valid in
  * both lists are tried with each – only the right secret opens the backup (AES-GCM).
  * The application is detected from the file header "<app>-backup".
@@ -93,5 +94,5 @@ async function decryptWith(secrets: Uint8Array[], file: unknown, app: string): P
     };
   }
   const files = findChunkedFiles(r.payload);
-  return { ok: true, app, createdAt: r.createdAt, payload: r.payload, files, chunkKeys: files.length ? await backupChunkKeys(secret, app) : null };
+  return { ok: true, app, createdAt: r.createdAt, payload: r.payload, files, chunkKeys: files.length ? await backupChunkKeys(secret, app, backupCodeParamsOf(file) ?? undefined) : null };
 }

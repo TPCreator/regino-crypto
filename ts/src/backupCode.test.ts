@@ -18,6 +18,7 @@ import {
   isBackupCodeSecret,
   looksLikeBackupCode,
   newBackupCode,
+  newBackupCodeParams,
   newBackupCodeSecret,
   parseBackupCode,
   validBackupCodeKdf,
@@ -237,13 +238,13 @@ describe('backup code – shared vectors with Rust (testvectors/regino/backup-co
   });
 });
 
-describe('backup code – backups (version 3)', () => {
+describe('backup code – backups (version 4 written since 0.19.0; version 3 read)', () => {
   it('encrypts with Argon2id parameters in the header and opens only with the same code', async () => {
     const secret = newBackupCodeSecret();
     const file = await encryptBackup(secret, data, '2026-11-14T08:00:00.000Z', 'ziacik', undefined, FAST);
-    expect(BACKUP_VERSION).toBe(3);
-    expect(BACKUP_VERSIONS).toEqual([1, 2, 3]);
-    expect(file).toMatchObject({ format: 'ziacik-backup', version: 3, secret: 'code16', kdf: { name: 'argon2id', ...MIN_BACKUP_CODE_KDF } });
+    expect(BACKUP_VERSION).toBe(4);
+    expect(BACKUP_VERSIONS).toEqual([1, 2, 3, 4]);
+    expect(file).toMatchObject({ format: 'ziacik-backup', version: 4, secret: 'code16', kdf: { name: 'argon2id', ...MIN_BACKUP_CODE_KDF } });
     expect(file.chunks).toBeUndefined();
     expect(await decryptBackup(secret, file, 'ziacik')).toEqual({ ok: true, payload: data, createdAt: '2026-11-14T08:00:00.000Z' });
     expect(await decryptBackup(newBackupCodeSecret(), file, 'ziacik')).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
@@ -292,7 +293,9 @@ describe('backup code – backups (version 3)', () => {
       { secret: undefined },
     ])
       expect(await bad(patch), JSON.stringify(patch)).toEqual({ ok: false, error: 'not-backup' });
-    expect(await bad({ version: 4 })).toEqual({ ok: false, error: 'newer-version' });
+    expect(await bad({ version: 5 })).toEqual({ ok: false, error: 'newer-version' });
+    // a version-4 file relabelled as version 3 (or the other way round) does not open: other key and AAD
+    expect(await bad({ version: 3 })).toEqual({ ok: false, error: 'wrong-key-or-damaged' });
   });
 
   it('a secret of the other kind never opens a backup', async () => {
@@ -336,10 +339,12 @@ describe('backup code – chunks, opening tool and sheet', () => {
   it('openBackup opens a code backup, with its files', async () => {
     const secret = newBackupCodeSecret();
     const code = formatBackupCode(secret);
-    const keys = await backupChunkKeys(secret, 'ziacik');
+    // version 4: the chunk keys come from the salt and parameters the backup is written with
+    const params = newBackupCodeParams(MIN_BACKUP_CODE_KDF);
+    const keys = await backupChunkKeys(secret, 'ziacik', params);
     const c = await sealBackupChunk(keys, new TextEncoder().encode('príloha'));
     const payload = { files: [{ name: 'a.txt', mime: 'text/plain', size: 8, chunks: [c.name] }] };
-    const file = JSON.stringify(await encryptBackup(secret, payload, '2026-11-14T09:00:00.000Z', 'ziacik', [c.name], FAST));
+    const file = JSON.stringify(await encryptBackup(secret, payload, '2026-11-14T09:00:00.000Z', 'ziacik', [c.name], { params }));
     const r = await openBackup(file, code.toLowerCase().replace(/-/g, ' '));
     if (!r.ok || !r.chunkKeys) throw new Error('not opened');
     expect(r).toMatchObject({ app: 'ziacik', createdAt: '2026-11-14T09:00:00.000Z', payload });

@@ -6,6 +6,9 @@
  *   (plus ` k128` for the 12-word code, as in backup.ts). Different info = independent from the backup key.
  *   A 16-character backup code (since 0.15.0) is first stretched by Argon2id with the fixed salt of the
  *   application (`backupCodeBase`), then the same HKDF with `<app> backup chunks v1 code16|enc` / `|name`.
+ * - Version 4 (since 0.19.0, audit F-02): with a backup code and the parameters of a version-4 backup
+ *   (`BackupCodeParams`: its random salt and Argon2id parameters) the keys come from Argon2id(code, salt, kdf) –
+ *   info `<app> backup chunks v2 code16|enc` / `|name`. Backups that share chunks share the parameters.
  * - Chunk name = HMAC-SHA256(name key, plain content), 64 hex characters. Same content = same name, so
  *   thirty backups share one copy of an unchanged file; without the code the name says nothing.
  * - Chunk file `<name>.rgb` = `RGB1 | nonce (12) | AES-256-GCM(enc key, content, AAD = "RGB1|<app>|<name>")`.
@@ -14,7 +17,7 @@
  *   (version 2): the app can delete unreferenced chunks without decrypting anything, and any change to the
  *   list is detected when the backup is opened.
  */
-import { backupCodeBase, isBackupCodeSecret } from './backupCode';
+import { backupCodeBase, backupCodeBaseV4, isBackupCodeSecret, type BackupCodeParams } from './backupCode';
 import { b64 } from './ecdh';
 
 const enc = new TextEncoder();
@@ -31,19 +34,27 @@ export interface BackupChunkKeys {
 
 const KIND: Readonly<Record<number, string>> = { 32: '', 16: ' k128', 10: ' code16' };
 
-function info(kind: string, app: string, purpose: 'enc' | 'name'): Uint8Array {
-  return enc.encode(`${app} backup chunks v1${kind}|${purpose}`);
+function info(kind: string, app: string, purpose: 'enc' | 'name', v: 1 | 2): Uint8Array {
+  return enc.encode(`${app} backup chunks v${v}${kind}|${purpose}`);
 }
 
-/** `secret` = 16/32 B of the words, or 10 B of a backup code (one Argon2id, about as long as opening the backup). */
-export async function backupChunkKeys(secret: Uint8Array, app: string): Promise<BackupChunkKeys> {
+/**
+ * `secret` = 16/32 B of the words, or 10 B of a backup code (one Argon2id, about as long as opening the backup).
+ * `params` (since 0.19.0) = salt and Argon2id parameters of a **version-4** backup (`backupCodeParamsOf(file)`, or
+ * the `newBackupCodeParams()` the app writes its backups with): only with a backup code. Without them a backup code
+ * gives the keys of version-3 backups (fixed salt of the application, default parameters).
+ */
+export async function backupChunkKeys(secret: Uint8Array, app: string, params?: BackupCodeParams): Promise<BackupChunkKeys> {
   if (!APP.test(app)) throw new Error('Invalid application name for the backup.');
   const kind = KIND[secret.length];
   if (kind === undefined || (secret.length === 10 && !isBackupCodeSecret(secret)))
     throw new Error('The recovery code must have 12 or 24 words, or be a 16-character backup code.');
-  const ikm = kind === ' code16' ? await backupCodeBase(secret, app) : secret;
+  if (params !== undefined && kind !== ' code16') throw new Error('Backup parameters are only for a backup code.');
+  const ikm = params !== undefined ? await backupCodeBaseV4(secret, params) : kind === ' code16' ? await backupCodeBase(secret, app) : secret;
+  const v = params !== undefined ? 2 : 1;
   const base = await crypto.subtle.importKey('raw', ikm as BufferSource, 'HKDF', false, ['deriveKey']);
-  const hkdf = (purpose: 'enc' | 'name') => ({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: info(kind, app, purpose) as BufferSource });
+  if (ikm !== secret) ikm.fill(0); // the Argon2id output (the caller's secret stays theirs)
+  const hkdf = (purpose: 'enc' | 'name') => ({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: info(kind, app, purpose, v) as BufferSource });
   return {
     app,
     enc: await crypto.subtle.deriveKey(hkdf('enc'), base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']),

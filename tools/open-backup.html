@@ -23,7 +23,7 @@
 <h1>Open a backup independently</h1>
 <p lang="sk" class="sk">Slovensky: Otvorte zálohu svojím obnovovacím kódom (12 alebo 24 slov – slovenských alebo anglických –, 16-znakový kód zálohy alebo QR kód). Všetko prebieha len vo vašom prehliadači.</p>
 <p>This file opens an encrypted backup from an app that uses the regino-crypto core, using your recovery code (12 or 24 words – Slovak or English –, a 16-character backup code, or the QR code from the recovery sheet). It runs only in your browser – <b>nothing is sent to the internet</b> (you can open it offline too).</p>
-<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.18.0.</small></p>
+<p><small>If the backup opens, this confirms that the app encrypts with the public code from <a href="https://github.com/TPCreator/regino-crypto">github.com/TPCreator/regino-crypto</a>. Tool version: 0.19.0.</small></p>
 <label for="file">Backup file</label>
 <input id="file" type="file" accept=".json,application/json,*/*">
 <label for="words">Recovery code – 12 or 24 words, or a 16-character backup code</label>
@@ -11274,6 +11274,18 @@
   async function backupCodeBase(secret, app) {
     return backupCodeStretch(secret, await backupCodeAppSalt(app), DEFAULT_BACKUP_CODE_KDF);
   }
+  function checkBackupCodeParams(params, max = MAX_BACKUP_CODE_KDF) {
+    const q = params;
+    const salt = q && typeof q === "object" ? q.salt : void 0;
+    if (!(salt instanceof Uint8Array) || salt.length !== 16) throw new Error("The salt must have 16 bytes.");
+    const kdf = q?.kdf && typeof q.kdf === "object" ? { m: q.kdf.m, t: q.kdf.t, p: q.kdf.p } : void 0;
+    if (!validBackupCodeKdf(kdf, max)) throw new Error("Argon2id parameters out of bounds.");
+    return { salt: salt.slice(), kdf };
+  }
+  async function backupCodeBaseV4(secret, params) {
+    const q = checkBackupCodeParams(params);
+    return backupCodeStretch(secret, q.salt, q.kdf);
+  }
 
   // src/ecdh.ts
   var enc2 = new TextEncoder();
@@ -11302,17 +11314,20 @@
   var APP2 = /^[a-z][a-z0-9]{1,31}$/;
   var BACKUP_CHUNK_OVERHEAD = 4 + 12 + 16;
   var KIND = { 32: "", 16: " k128", 10: " code16" };
-  function info(kind, app, purpose) {
-    return enc3.encode(`${app} backup chunks v1${kind}|${purpose}`);
+  function info(kind, app, purpose, v) {
+    return enc3.encode(`${app} backup chunks v${v}${kind}|${purpose}`);
   }
-  async function backupChunkKeys(secret, app) {
+  async function backupChunkKeys(secret, app, params) {
     if (!APP2.test(app)) throw new Error("Invalid application name for the backup.");
     const kind = KIND[secret.length];
     if (kind === void 0 || secret.length === 10 && !isBackupCodeSecret(secret))
       throw new Error("The recovery code must have 12 or 24 words, or be a 16-character backup code.");
-    const ikm = kind === " code16" ? await backupCodeBase(secret, app) : secret;
+    if (params !== void 0 && kind !== " code16") throw new Error("Backup parameters are only for a backup code.");
+    const ikm = params !== void 0 ? await backupCodeBaseV4(secret, params) : kind === " code16" ? await backupCodeBase(secret, app) : secret;
+    const v = params !== void 0 ? 2 : 1;
     const base = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveKey"]);
-    const hkdf = (purpose) => ({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: info(kind, app, purpose) });
+    if (ikm !== secret) ikm.fill(0);
+    const hkdf = (purpose) => ({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: info(kind, app, purpose, v) });
     return {
       app,
       enc: await crypto.subtle.deriveKey(hkdf("enc"), base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]),
@@ -11383,8 +11398,8 @@
     if (!APP3.test(app)) throw new Error("Invalid application name for the backup.");
     return `${app}-backup`;
   };
-  var BACKUP_VERSION = 3;
-  var BACKUP_VERSIONS = [1, 2, 3];
+  var BACKUP_VERSION = 4;
+  var BACKUP_VERSIONS = [1, 2, 3, 4];
   var BACKUP_CODE_SECRET = "code16";
   var enc4 = new TextEncoder();
   var dec = new TextDecoder();
@@ -11411,9 +11426,15 @@
       ["encrypt", "decrypt"]
     );
   }
-  async function codeBackupKey(secret, salt, kdf, app) {
-    const raw = await hkdf32(await backupCodeStretch(secret, salt, kdf), `${app} backup v3 ${BACKUP_CODE_SECRET}`);
-    return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+  async function codeBackupKey(secret, salt, kdf, app, version) {
+    const stretched = await backupCodeStretch(secret, salt, kdf);
+    const raw = await hkdf32(stretched, `${app} backup v${version} ${BACKUP_CODE_SECRET}`);
+    stretched.fill(0);
+    try {
+      return await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+    } finally {
+      raw.fill(0);
+    }
   }
   async function header(format, version, createdAt, chunks, kdf) {
     if (version < 2) return enc4.encode(`${format}|${version}|${createdAt}`);
@@ -11430,17 +11451,18 @@
     const version = f.version;
     if (Number.isInteger(version) && version > BACKUP_VERSION) return { ok: false, error: "newer-version" };
     if (typeof version !== "number" || !BACKUP_VERSIONS.includes(version)) return { ok: false, error: "not-backup" };
-    const kdf = version === 3 ? f.kdf : void 0;
-    if (version === 3 && (f.secret !== BACKUP_CODE_SECRET || kdf?.name !== "argon2id" || !validBackupCodeKdf(kdf, options.maxKdf)))
+    const codeVersion = version === 3 || version === 4;
+    const kdf = codeVersion ? f.kdf : void 0;
+    if (codeVersion && (f.secret !== BACKUP_CODE_SECRET || kdf?.name !== "argon2id" || !validBackupCodeKdf(kdf, options.maxKdf)))
       return { ok: false, error: "not-backup" };
-    if (version === 3 !== isBackupCodeSecret(secret)) return { ok: false, error: "wrong-key-or-damaged" };
+    if (codeVersion !== isBackupCodeSecret(secret)) return { ok: false, error: "wrong-key-or-damaged" };
     try {
       const salt = unb64(f.salt);
       if (salt.length !== 16) throw new Error("The salt must have 16 bytes.");
       const chunksOk = Array.isArray(f.chunks) && f.chunks.every((c, i, a) => typeof c === "string" && (i === 0 || a[i - 1] < c));
       if (version === 2 && !chunksOk) throw new Error("Missing chunk list.");
-      if (version === 3 && f.chunks !== void 0 && !(chunksOk && f.chunks.length)) throw new Error("Invalid chunk list.");
-      const key = kdf ? await codeBackupKey(secret, salt, kdf, app) : await backupKey(secret, salt, app);
+      if (codeVersion && f.chunks !== void 0 && !(chunksOk && f.chunks.length)) throw new Error("Invalid chunk list.");
+      const key = kdf ? await codeBackupKey(secret, salt, kdf, app, version) : await backupKey(secret, salt, app);
       const aad2 = await header(format, version, f.createdAt, f.chunks ?? [], kdf);
       const plain = await crypto.subtle.decrypt(
         { name: "AES-GCM", iv: gcmNonce(f.nonce), additionalData: aad2 },
@@ -11451,10 +11473,20 @@
         ok: true,
         payload: JSON.parse(dec.decode(plain)),
         createdAt: f.createdAt,
-        ...version === 2 || version === 3 && f.chunks ? { chunks: f.chunks } : {}
+        ...version === 2 || codeVersion && f.chunks ? { chunks: f.chunks } : {}
       };
     } catch {
       return { ok: false, error: "wrong-key-or-damaged" };
+    }
+  }
+  function backupCodeParamsOf(file, max = MAX_BACKUP_CODE_KDF) {
+    const f = file;
+    if (!f || typeof f !== "object" || f.version !== 4 || f.secret !== BACKUP_CODE_SECRET || f.kdf?.name !== "argon2id" || typeof f.salt !== "string")
+      return null;
+    try {
+      return checkBackupCodeParams({ salt: unb64(f.salt), kdf: f.kdf }, max);
+    } catch {
+      return null;
     }
   }
 
@@ -15729,7 +15761,7 @@
       };
     }
     const files = findChunkedFiles(r.payload);
-    return { ok: true, app, createdAt: r.createdAt, payload: r.payload, files, chunkKeys: files.length ? await backupChunkKeys(secret, app) : null };
+    return { ok: true, app, createdAt: r.createdAt, payload: r.payload, files, chunkKeys: files.length ? await backupChunkKeys(secret, app, backupCodeParamsOf(file) ?? void 0) : null };
   }
 
   // tools/page.ts
