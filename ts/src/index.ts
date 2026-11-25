@@ -50,3 +50,5 @@ export * from './groupKey';
 export * from './context';
 // device key + short PIN as a gate, passkey PRF (since 0.20.0)
 export * from './deviceVault';
+// master key wrapped by a password, a recovery phrase and other keys (since 0.22.0)
+export * from './keyfile';
