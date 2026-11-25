@@ -262,8 +262,38 @@ pub(crate) fn base(code: &BackupCode, app: &str) -> Result<Key, Error> {
 /// Id of a code for a server: HKDF-SHA256(base, `<app> backup-code id v1`). It reveals neither the code
 /// nor a key, but guesses can be tested against it offline at Argon2id cost – the server must keep it
 /// like a password hash and limit the number of attempts of anyone asking by id (`AUDIT.md`, question 20).
+/// For backups of version 3: the fixed salt lets one guess test every id of the application at once and the cost
+/// is always [`DEFAULT_PARAMS`] (audit F-02) – new apps use [`backup_id`] with the parameters of a version-4 backup.
 pub fn backup_code_id(code: &BackupCode, app: &str) -> Result<[u8; 32], Error> {
     Ok(*expand(&base(code, app)?, &format!("{app} backup-code id v1")).as_bytes())
+}
+
+// ---- version 4 (since 0.19.0, audit F-02) ----
+//
+// One Argon2id(code, header salt, header parameters) gives the backup key, the chunk keys
+// (`BackupChunkKeys::from_backup_code_v4`) and the id for a server – so they cost what the header says and differ
+// between users (a random salt, not the fixed salt of the application). Backups that share chunks share the salt
+// and the parameters. The same as `ts/src/backup.ts` (version 4), `backupChunks.ts` and `backupIdForServer`.
+
+/// Argon2id of a version-4 backup: the one input of its backup key, chunk keys and server id.
+pub(crate) fn base_v4(code: &BackupCode, salt: &[u8; 16], params: KdfParams) -> Result<Key, Error> {
+    stretch(code, salt, params)
+}
+
+/// Key of a version-4 backup: HKDF-SHA256(Argon2id(code, header salt, header parameters), `<app> backup v4 code16`)
+/// – the AES-256-GCM key of `ts/src/backup.ts`. The AAD has the layout of version 3 with `|4|`.
+pub fn backup_key_v4(code: &BackupCode, salt: &[u8; 16], params: KdfParams, app: &str) -> Result<Key, Error> {
+    check_app(app)?;
+    Ok(expand(&base_v4(code, salt, params)?, &format!("{app} backup v4 code16")))
+}
+
+/// Id for a server of the version-4 backups made with this salt and these parameters: HKDF-SHA256(Argon2id(code,
+/// salt, params), `<app> backup-code id v2`) – `backupIdForServer` in TypeScript. It needs the salt from the header,
+/// so it cannot be computed from the code alone; a guess costs the Argon2id of the header and tests only this
+/// user's id. The server still keeps it like a password hash and limits attempts.
+pub fn backup_id(code: &BackupCode, salt: &[u8; 16], params: KdfParams, app: &str) -> Result<[u8; 32], Error> {
+    check_app(app)?;
+    Ok(*expand(&base_v4(code, salt, params)?, &format!("{app} backup-code id v2")).as_bytes())
 }
 
 #[cfg(test)]

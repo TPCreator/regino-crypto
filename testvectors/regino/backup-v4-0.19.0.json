@@ -1,0 +1,200 @@
+{
+  "version": "0.19.0",
+  "description": "Backup version 4 (regino-crypto 0.19.0, audit F-02): a 16-character backup code; one Argon2id(code, header salt, header m/t/p) gives the backup key, the chunk keys and the id for a server. Made by TypeScript (ts/src/backup.ts, backupCode.ts, backupChunks.ts), checked by ts/src/backupV4.test.ts and keys/tests/backup_v4_0_19_0.rs. The keys and codes are test values only.",
+  "app": "demo",
+  "derivations": {
+    "base": "Argon2id(secret, header salt, header m/t/p), output 32 B, version 0x13",
+    "backup_key": "HKDF-SHA256(base, salt = empty, info = \"<app> backup v4 code16\")",
+    "chunk_keys": "HKDF-SHA256(base, salt = empty, info = \"<app> backup chunks v2 code16|enc\" / \"|name\")",
+    "id": "HKDF-SHA256(base, salt = empty, info = \"<app> backup-code id v2\")",
+    "aad": "\"<app>-backup|4|<createdAt>|code16|argon2id m=<m> t=<t> p=<p>|\" + base64(SHA-256(sorted chunk names joined by newline))"
+  },
+  "keys": [
+    {
+      "secret": "00000000000000000000",
+      "salt": "000102030405060708090a0b0c0d0e0f",
+      "kdf": {
+        "m": 32768,
+        "t": 2,
+        "p": 1
+      },
+      "code": "0000-0000-0000-0000",
+      "argon2id": "209b542f834d3eda8b2bb5b96edfd7b945f3a26d086a7a55d172018c0c3be7d1",
+      "backup_key": "02ec271afd8c67e3ed659c286b1f2c43c7578d7e745e4edebc014cc8bfbbd0f7",
+      "chunk_enc": "1ffae25aa26015f3533c2781af538a06d2f73cecf930c68a9298c7a165be5876",
+      "chunk_name_key": "d65976abaa563cfac3fa103cae0aad2d45dce4adb58709b5c329575d3f12841e",
+      "id": "6eaa7f3a253ef2686763f131e47ea846c30e22e0ead3fc7ef3d924682d3641f6",
+      "id_v1": "ce8ff44b21f13334561d5132037b04c0e5546f284c9f5383dbfffec98dca85aa",
+      "chunk_name_of_x": "d111e0b052527535245b0d46a3242eac926605d46ec982d7dd5b55df4b526eec"
+    },
+    {
+      "secret": "0123456789abcdef0120",
+      "salt": "f0e1d2c3b4a5968778695a4b3c2d1e0f",
+      "kdf": {
+        "m": 19456,
+        "t": 2,
+        "p": 1
+      },
+      "code": "04HM-ASW9-NF6Y-Y09F",
+      "argon2id": "762034fd12a3437ac96dfa262bc63444814314aced67f40bbd5f1d3e995fd740",
+      "backup_key": "daa76d5d0e65e8ed51f5788bf882d8372a547df79d5af6d51dea973aee516abb",
+      "chunk_enc": "0ae1e330c7aec44c626c424a32516448e9668927caf60e309970276fe6161387",
+      "chunk_name_key": "b6a7cdc5abc3faecf6952e8cff70d8b414990edbe9c4e5d213992aa9be7b87ef",
+      "id": "c73733aa7d09daf2e2d07053939350628d3b4ea90bb6e44d2ad21c352a32208f",
+      "id_v1": "80e48f99ccf85dd0575b28872696ec5bf2e2b549066da4fce0cad625319fb2b8",
+      "chunk_name_of_x": "8347045d8a232087fdc31c0a3ba2010da8e40acca4f1216ca63573eaea9f889f"
+    },
+    {
+      "secret": "73dcb88fcac796fd3f00",
+      "salt": "26a37741b17eeb712abfae94cb0bd631",
+      "kdf": {
+        "m": 24576,
+        "t": 3,
+        "p": 2
+      },
+      "code": "EFEB-H3YA-RYBF-TFR2",
+      "argon2id": "dbb055f4fa415b04227ba5a7edf65d7412d8c2f96ea9afb722bec0546895d1e6",
+      "backup_key": "445ead69f71c0450b9bce778fc05a4d73abc91602e35a53ff375d1af3a6cdd0e",
+      "chunk_enc": "7eb69d9d25a5c634d4e0ad3f786399537908d2942d81d8a40017c82a9c944a1e",
+      "chunk_name_key": "0cbab761c43890e021b0d40df5ef240fdd731aebbf504a281a3c6146b0f41832",
+      "id": "f3b0d8c17e8bbf08481f1737bf1804fd596a27e4347c2a75f4d6c176a53deae3",
+      "id_v1": "12617be6f1a7cc3c4ad81326195006291b15749ff69960f45c64952ec9198394",
+      "chunk_name_of_x": "8309134c8ec585b3270e35436342b9561eccbc5123ab977161a6c5e5573c7a7b"
+    }
+  ],
+  "backups": [
+    {
+      "name": "no chunks, default parameters",
+      "code": "04HM-ASW9-NF6Y-Y09F",
+      "aad_prefix": "demo-backup|4|2026-11-25T12:00:00.000Z|code16|argon2id m=32768 t=2 p=1|",
+      "file": {
+        "format": "demo-backup",
+        "version": 4,
+        "createdAt": "2026-11-25T12:00:00.000Z",
+        "secret": "code16",
+        "kdf": {
+          "name": "argon2id",
+          "m": 32768,
+          "t": 2,
+          "p": 1
+        },
+        "salt": "ROxvJYmmzyhS2W57mBN78Q==",
+        "nonce": "iw11AwMup9WksSd/",
+        "ciphertext": "uz1q/72JtHlhw+/IXnqfuUCKGIn36x5ZXFtM2n7j4A9CwvkwQDSyHNKnqgyDczXeihuIKN43pw1iL8RobApxvTQHsJt4"
+      },
+      "payload": {
+        "portfolio": [
+          {
+            "pupil": "Bodka",
+            "note": "záloha v4"
+          }
+        ]
+      }
+    },
+    {
+      "name": "raised parameters",
+      "code": "04HM-ASW9-NF6Y-Y09F",
+      "aad_prefix": "demo-backup|4|2026-11-25T13:00:00.000Z|code16|argon2id m=20480 t=3 p=2|",
+      "file": {
+        "format": "demo-backup",
+        "version": 4,
+        "createdAt": "2026-11-25T13:00:00.000Z",
+        "secret": "code16",
+        "kdf": {
+          "name": "argon2id",
+          "m": 20480,
+          "t": 3,
+          "p": 2
+        },
+        "salt": "Q5VQNxVvHOaZEAls590EaA==",
+        "nonce": "mu9+/5JVdSbzvgfD",
+        "ciphertext": "SuxSkVzxOtGIbjpYWCG8yfDVMGWh7ghGofXZRW/JmQ=="
+      },
+      "payload": {
+        "raised": true
+      }
+    }
+  ],
+  "chunks": {
+    "code": "EFEB-H3YA-RYBF-TFR2",
+    "params": {
+      "salt": "9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+      "kdf": {
+        "m": 19456,
+        "t": 2,
+        "p": 1
+      }
+    },
+    "content": "príloha portfólia v4",
+    "name": "c38aa106000080d8b277f0861076f8dff39c3b1965fa5c5be7859f6f15dd0c44",
+    "blob": "524742314e154e24f44a7d4752431cfb776841dc1a61f564e786f423a1a7200a317b96b7424dc409beff76feb792bd89d6b00c7f9649",
+    "backups": [
+      {
+        "file": {
+          "format": "demo-backup",
+          "version": 4,
+          "createdAt": "2026-11-25T12:30:00.000Z",
+          "secret": "code16",
+          "kdf": {
+            "name": "argon2id",
+            "m": 19456,
+            "t": 2,
+            "p": 1
+          },
+          "salt": "mot8bV5PMCESA/Tl1se4qQ==",
+          "nonce": "dHp5J3wEXVUQq8oX",
+          "ciphertext": "1XnoWPivvHZCPknmHrCNCdpyq6AqFE0U92k+kJTFeiEJ8ziTEWt8N/8hh89Brlti2gnLe7vOn5O1hn1QWA1ael9zFLL9bwkJnuXzouqdOJBEaD8ZeJ7EC6jcDZerO7oHoClApeNzgtlk4vG56OkpE/Cxp1bwbWOAoZDxCnc/R3eitv4mCLVruwWFnd5tXBO8t1OHNsxZyTmHxMkH71ltoFc8fQ==",
+          "chunks": [
+            "c38aa106000080d8b277f0861076f8dff39c3b1965fa5c5be7859f6f15dd0c44"
+          ]
+        },
+        "payload": {
+          "files": [
+            {
+              "name": "práca.txt",
+              "mime": "text/plain",
+              "size": 22,
+              "chunks": [
+                "c38aa106000080d8b277f0861076f8dff39c3b1965fa5c5be7859f6f15dd0c44"
+              ]
+            }
+          ],
+          "n": 1
+        }
+      },
+      {
+        "file": {
+          "format": "demo-backup",
+          "version": 4,
+          "createdAt": "2026-11-26T12:30:00.000Z",
+          "secret": "code16",
+          "kdf": {
+            "name": "argon2id",
+            "m": 19456,
+            "t": 2,
+            "p": 1
+          },
+          "salt": "mot8bV5PMCESA/Tl1se4qQ==",
+          "nonce": "1oVyQ/y2KyZY1dS4",
+          "ciphertext": "5SGUqPhky8Pavz1fkdctQewXPTUs6+6+CJI7/f4q80bos3T16r6dt1vL29NiQ540u7TzujyNXnFjqiAZLEw0d791wZRPWsUwG3EKhqJqUSp0iTqw+/M4cTwePSHUpo42or3v2P3LnnEnFFMOn0c7+m29XGrdh2MmH+44NEIwvNFhw+UJmoGf7wNOR3WM+sqyZOmoa8jMjZ3F00t8Ui+QbMuH2g==",
+          "chunks": [
+            "c38aa106000080d8b277f0861076f8dff39c3b1965fa5c5be7859f6f15dd0c44"
+          ]
+        },
+        "payload": {
+          "files": [
+            {
+              "name": "práca.txt",
+              "mime": "text/plain",
+              "size": 22,
+              "chunks": [
+                "c38aa106000080d8b277f0861076f8dff39c3b1965fa5c5be7859f6f15dd0c44"
+              ]
+            }
+          ],
+          "n": 2
+        }
+      }
+    ]
+  }
+}

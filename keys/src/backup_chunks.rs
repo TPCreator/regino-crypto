@@ -5,11 +5,14 @@
 //!   every backup): info `<app> backup chunks v1[ k128]|enc` and `…|name`. A 16-character backup code
 //!   (since 0.15.0) is first stretched by Argon2id with the fixed salt of the application
 //!   (`backup_code`), then the same HKDF with ` code16` ([`BackupChunkKeys::from_backup_code`]).
+//!   Since 0.19.0 (backup version 4, audit F-02): Argon2id with the random salt and the parameters of the backup
+//!   header, info `<app> backup chunks v2 code16|…` ([`BackupChunkKeys::from_backup_code_v4`]).
 //! - Name = hex(HMAC-SHA256(name key, content)) – 64 characters; thirty backups share one copy.
 //! - File `<name>.rgb` = `RGB1 | nonce (12) | AES-256-GCM(enc key, content, AAD = "RGB1|<app>|<name>")`.
 //!   Opening recomputes the name from the content (constant time).
 
 use crate::backup_code::{self, BackupCode};
+use crate::kdf::KdfParams;
 use crate::Error;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
@@ -57,12 +60,26 @@ impl BackupChunkKeys {
         Self::derive(backup_code::base(code, app)?.as_bytes(), " code16", app)
     }
 
+    /// Since 0.19.0: keys of the chunks of **version-4** backups – one Argon2id(code, header salt, header parameters),
+    /// then info `<app> backup chunks v2 code16|enc` / `|name` (audit F-02). Backups that share chunks share the salt
+    /// and the parameters (`backupChunkKeys(code, app, params)` in TypeScript).
+    pub fn from_backup_code_v4(code: &BackupCode, salt: &[u8; 16], params: KdfParams, app: &str) -> Result<BackupChunkKeys, Error> {
+        if !valid_app(app) {
+            return Err(Error::Format);
+        }
+        Self::derive_v(backup_code::base_v4(code, salt, params)?.as_bytes(), " code16", app, 2)
+    }
+
     fn derive(ikm: &[u8], kind: &str, app: &str) -> Result<BackupChunkKeys, Error> {
+        Self::derive_v(ikm, kind, app, 1)
+    }
+
+    fn derive_v(ikm: &[u8], kind: &str, app: &str, v: u8) -> Result<BackupChunkKeys, Error> {
         let hk = Hkdf::<Sha256>::new(Some(&[]), ikm);
         let mut enc = Zeroizing::new([0u8; 32]);
         let mut name = Zeroizing::new([0u8; 32]);
-        hk.expand(format!("{app} backup chunks v1{kind}|enc").as_bytes(), enc.as_mut()).map_err(|_| Error::Format)?;
-        hk.expand(format!("{app} backup chunks v1{kind}|name").as_bytes(), name.as_mut()).map_err(|_| Error::Format)?;
+        hk.expand(format!("{app} backup chunks v{v}{kind}|enc").as_bytes(), enc.as_mut()).map_err(|_| Error::Format)?;
+        hk.expand(format!("{app} backup chunks v{v}{kind}|name").as_bytes(), name.as_mut()).map_err(|_| Error::Format)?;
         Ok(BackupChunkKeys { app: app.to_string(), enc, name })
     }
 
