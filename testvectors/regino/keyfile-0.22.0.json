@@ -1,0 +1,62 @@
+{
+  "version": "0.22.0",
+  "description": "regino keyfile v1 (0.22.0): wrap = \"RGK1\" || nonce(12) || AES-256-GCM(master)(48), AAD = \"RGK1\" || \"regino keyfile v1|<app>|<method>\". Made by TypeScript (ts/src/keyfile.ts), checked by Rust (keys/tests/keyfile_0_22_0.rs).",
+  "wraps": [
+    {
+      "app": "testapp",
+      "method": "shares",
+      "kek": "0724415e7b98b5d2ef0c294663809dbad7f4112e4b6885a2bfdcf91633506d8a",
+      "master": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a",
+      "nonce": "070a0d101316191c1f222528",
+      "wrap": "52474b31070a0d101316191c1f2225284126a46374d17960c9bee7ffb89ff0f9412365cc111909ea4bbf2036aa6381743d1cdc5930c994aac69ae4338adbd22f"
+    },
+    {
+      "app": "testapp",
+      "method": "device:windows-hello",
+      "kek": "0726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8",
+      "master": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a",
+      "nonce": "070c11161b20252a2f34393e",
+      "wrap": "52474b31070c11161b20252a2f34393e9e38f5d79a0c02ea88e6e6bf217195791e100869e93821976259c61ebfb8673793bc82d46cd32d59e5fe83dfdbc872c0"
+    },
+    {
+      "app": "otherapp",
+      "method": "shares",
+      "kek": "0724415e7b98b5d2ef0c294663809dbad7f4112e4b6885a2bfdcf91633506d8a",
+      "master": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a",
+      "nonce": "070a0d101316191c1f222528",
+      "wrap": "52474b31070a0d101316191c1f2225284126a46374d17960c9bee7ffb89ff0f9412365cc111909ea4bbf2036aa63817445d190183f9d60ec5a9209d5e083bb38"
+    }
+  ],
+  "password": {
+    "app": "testapp",
+    "password": "heslo správcu 2026",
+    "salt": "0718293a4b5c6d7e8fa0b1c2d3e4f506",
+    "kdf": {
+      "m": 19456,
+      "t": 2,
+      "p": 1
+    },
+    "kek": "6b3e583505befd85c796d7523437c00ddfe834d7791bc86085b1667d28f20473",
+    "master": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a",
+    "nonce": "071019222b343d464f58616a",
+    "wrap": "52474b31071019222b343d464f58616a00cd0cf5be8fcd6af6a66bf7f647ad0669e7831e83142309cdb540cffc515d080ccfc3dfafa89091aff215e070000693"
+  },
+  "recovery": [
+    {
+      "app": "testapp",
+      "secret": "07305982abd4fd264f78a1caf31c456e",
+      "kek": "cc80657f4665264a9a7403679889896e073f5de46fc48c06b8b1ee1aad76cbaf",
+      "master": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a",
+      "nonce": "07121d28333e49545f6a7580",
+      "wrap": "52474b3107121d28333e49545f6a7580ffb310a15825e7c13ed43e8e8853dd1cb8344b557f28cc50f152a47a753a6debc6af0b7c59bef014927862be8713dd5b"
+    },
+    {
+      "app": "testapp",
+      "secret": "07325d88b3de09345f8ab5e00b36618cb7e20d38638eb9e40f3a6590bbe6113c",
+      "kek": "198392c0b4e63e50c8842d75bd3e4d4a7561e0a5293a700d2554ca733a9b7584",
+      "master": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9a",
+      "nonce": "071a2d405366798c9fb2c5d8",
+      "wrap": "52474b31071a2d405366798c9fb2c5d889fa5a91c7f283bbf7f385480e31959c94e80eb2f18c003267ea3cdc33ee6a5a9cd17cd34b1eda12205296e92deb704c"
+    }
+  ]
+}

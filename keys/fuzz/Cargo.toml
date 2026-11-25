@@ -44,3 +44,10 @@ path = "fuzz_targets/wrap_unwrap.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "keyfile_unwrap"
+path = "fuzz_targets/keyfile_unwrap.rs"
+test = false
+doc = false
+bench = false

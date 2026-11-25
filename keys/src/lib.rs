@@ -5,6 +5,7 @@
 //! - [`backup_chunks`] – large files in backups: content-addressed chunks (HMAC name, AES-256-GCM), shared by all backups.
 //! - [`chunks`] – large files sealed in chunks (index and final-chunk flag authenticated) and a keyed fingerprint.
 //! - [`wrap`] – wrapping a key with another key and sealing data (XChaCha20-Poly1305, version in the header).
+//! - [`keyfile`] – master key wrapped per method (password, recovery phrase, shares, device), AES-256-GCM, same bytes as TypeScript.
 //! - [`recovery`] – key from a recovery phrase (12 or 24 words) via HKDF-SHA256.
 //! - [`device`] – key from a secret held by the device (Windows Hello signature, passkey PRF) via HKDF-SHA256 – quick unlock.
 //! - [`group`] – code and id derived from a group key (comparing by phone, key-bound ids).
@@ -25,6 +26,7 @@ pub mod context;
 pub mod device;
 pub mod group;
 pub mod kdf;
+pub mod keyfile;
 pub mod recovery;
 pub mod shamir;
 pub mod sign;

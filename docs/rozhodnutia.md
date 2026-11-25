@@ -2,6 +2,11 @@
 
 Rozhodnutia Tomáša k jadru šifrovania (novšie hore).
 
+- **2026-11-25 – Súbor kľúčov (`keyfile`) v jadre – 0.22.0.** Tomáš 2026-11-25 v hlavnej session: „jedno miesto, jeden kod,
+  co najviac appiek“, „synchro a db ries tiez …“ (Ziacik `docs/rozhodnutia.md` 2026-11-25, prieskum app-core
+  `docs/zdielanie-prieskum-2026-11.md` bod 18) a v session zdieľania „urob to ja schvalujem vsetko“ – obálka hlavného
+  kľúča (heslo, obnovovacie slová, podiely, kľúč zariadenia) je jeden model v jadre pre Testurion (`author/keyring.ts`)
+  a Dôverník (`keyfile.rs`); formáty aplikácií sa menia bez spätnej kompatibility (aplikácie nikto nepoužíva).
 - **2026-11-25 – Zrušiť `backupCodeId` (id v3 s pevnou soľou aplikácie) – 0.21.0; aplikácie hneď na nové jadro.** Tomáš
   2026-11-25 v tejto session na otázky z hlásenia: „1 zrus“ (staré id pre server z verzie v3 – žiadna aplikácia ho
   nepoužíva; náhrada `backupIdForServer`) a „2 hned a ries ty“ (presun aplikácií na nové jadro hneď, robí Claude).
