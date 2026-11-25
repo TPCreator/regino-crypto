@@ -109,7 +109,6 @@ fn keys_and_ids_are_the_same_as_in_typescript() {
         assert_eq!(hex(backup_code::stretch(&c, &salt, p).unwrap().as_bytes()), s(k, "argon2id"));
         assert_eq!(hex(backup_code::backup_key_v4(&c, &salt, p, app).unwrap().as_bytes()), s(k, "backup_key"));
         assert_eq!(hex(&backup_code::backup_id(&c, &salt, p, app).unwrap()), s(k, "id"));
-        assert_eq!(hex(&backup_code::backup_code_id(&c, app).unwrap()), s(k, "id_v1"));
         assert_ne!(s(k, "id"), s(k, "id_v1"));
         let ck = BackupChunkKeys::from_backup_code_v4(&c, &salt, p, app).unwrap();
         assert_eq!(ck.name(b"x"), s(k, "chunk_name_of_x"));

@@ -6,7 +6,6 @@ import {
   DEFAULT_BACKUP_CODE_KDF,
   MIN_BACKUP_CODE_KDF,
   MOBILE_BACKUP_CODE_KDF,
-  backupCodeId,
   backupCodeStretch,
   backupIdForServer,
   checkBackupCodeParams,
@@ -67,7 +66,7 @@ describe('backup v4 – shared vectors with Rust (backup-v4-0.19.0.json)', () =>
     expect(hex(await hkdf32(base, `${v.app} backup chunks v2 code16|enc`))).toBe(k.chunk_enc);
     expect(hex(await hkdf32(base, `${v.app} backup chunks v2 code16|name`))).toBe(k.chunk_name_key);
     expect(hex(await backupIdForServer(secret, v.app, params))).toBe(k.id);
-    expect(hex(await backupCodeId(secret, v.app))).toBe(k.id_v1);
+    expect(k.id).not.toBe(k.id_v1); // the version-3 id (removed in 0.21.0) was another value
     const keys = await backupChunkKeys(secret, v.app, params);
     expect(await backupChunkName(keys, new TextEncoder().encode('x'))).toBe(k.chunk_name_of_x);
     // the name key really is the HKDF output above (HMAC computed independently)
@@ -162,7 +161,6 @@ describe('backup v4 – chunk keys and server id (F-02)', () => {
     expect(hex(id1)).toBe(hex(await backupIdForServer(secret, 'demo', { salt: p1.salt, kdf: p1.kdf })));
     expect(hex(id1)).not.toBe(hex(await backupIdForServer(secret, 'demo', p2)));
     expect(hex(id1)).not.toBe(hex(await backupIdForServer(secret, 'other', p1)));
-    expect(hex(id1)).not.toBe(hex(await backupCodeId(secret, 'demo')));
     // the id is HKDF of the same Argon2id as the backup key, with its own info
     const base = await backupCodeStretch(secret, p1.salt, p1.kdf);
     expect(hex(id1)).toBe(hex(await hkdf32(base, 'demo backup-code id v2')));

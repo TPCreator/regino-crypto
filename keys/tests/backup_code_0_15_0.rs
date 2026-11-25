@@ -134,10 +134,7 @@ fn argon2id_backup_keys_salt_and_ids_are_the_same_as_in_typescript() {
         assert_eq!(hex(backup_code::stretch(&c, &salt, p).unwrap().as_bytes()), s(k, "argon2id"));
         assert_eq!(hex(backup_code::backup_key(&c, &salt, p, app).unwrap().as_bytes()), s(k, "backup_key"));
     }
-    for c in d["codes"].as_array().unwrap().iter().take(3) {
-        let k = code(s(c, "code"));
-        assert_eq!(hex(&backup_code::backup_code_id(&k, app).unwrap()), s(c, "id"));
-    }
+    // the ids of the vector (`backup_code_id`, fixed salt) are history: the function was removed in 0.21.0 (F-02)
 }
 
 #[test]

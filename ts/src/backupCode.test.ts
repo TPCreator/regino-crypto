@@ -10,7 +10,6 @@ import {
   MAX_BACKUP_CODE_KDF,
   MIN_BACKUP_CODE_KDF,
   backupCodeAppSalt,
-  backupCodeId,
   backupCodeQrText,
   backupCodeStretch,
   formatBackupCode,
@@ -151,7 +150,6 @@ describe('backup code – format', () => {
 
   it('the package exports only the public API of the backup code', () => {
     expect(typeof index.parseBackupCode).toBe('function');
-    expect(typeof index.backupCodeId).toBe('function');
     for (const internal of ['backupCodeStretch', 'backupCodeBase', 'backupCodeAppSalt', 'hkdf32']) expect(index).not.toHaveProperty(internal);
   });
 });
@@ -221,7 +219,6 @@ describe('backup code – shared vectors with Rust (testvectors/regino/backup-co
       expect(hex(stretch)).toBe(k.argon2id);
       expect(hex(await hkdf32(stretch, `${v.app} backup v3 code16`))).toBe(k.backup_key);
     }
-    for (const c of v.codes.slice(0, 3)) expect(hex(await backupCodeId(unhex(c.secret), v.app))).toBe(c.id);
   });
 
   it('the fixed backups and the chunk open unchanged', async () => {
@@ -313,15 +310,8 @@ describe('backup code – backups (version 4 written since 0.19.0; version 3 rea
     await expect(secretToWords(code)).rejects.toThrow('16 or 32 bytes');
   });
 
-  it('the id is deterministic per code and application and independent of the backup key', async () => {
-    const secret = newBackupCodeSecret();
-    const id = await backupCodeId(secret, 'ziacik');
-    expect(id.length).toBe(32);
-    expect(hex(await backupCodeId(secret, 'ziacik'))).toBe(hex(id));
-    expect(hex(await backupCodeId(secret, 'gazda'))).not.toBe(hex(id));
-    expect(hex(await backupCodeId(newBackupCodeSecret(), 'ziacik'))).not.toBe(hex(id));
-    await expect(backupCodeId(secret, 'Bad name')).rejects.toThrow('application');
-    await expect(backupCodeId(new Uint8Array(16), 'demo')).rejects.toThrow('10 bytes');
+  it('the version-3 id for a server is gone (0.21.0, F-02)', () => {
+    expect((index as Record<string, unknown>).backupCodeId).toBeUndefined();
   });
 });
 

@@ -15,7 +15,7 @@
  * - Keys from the code always go through **Argon2id** (the code has only 75 bits, a plain HKDF would let
  *   a stolen file be tried at GPU speed): a backup uses a random 16-byte salt and parameters stored in its
  *   header (`backup.ts`, version 3); the id for a server and the keys of backup chunks use one Argon2id
- *   with a fixed salt of the application (`backupCodeId`, `backupChunkKeys`).
+ *   with a fixed salt of the application (`backupChunkKeys` of version-3 backups).
  * Same computation in Rust (`regino_keys::backup_code`), guarded by `testvectors/regino/backup-code-0.15.0.json`.
  */
 import { argon2idAsync } from '@noble/hashes/argon2.js';
@@ -226,26 +226,13 @@ export async function backupCodeAppSalt(app: string): Promise<Uint8Array> {
 /**
  * (internal) Key material the same in every backup of one code and application: Argon2id with the fixed salt of the
  * application and the fixed parameters `DEFAULT_BACKUP_CODE_KDF` (part of "v1" – raising them is a v2).
- * Only HKDF outputs of it leave the core (`backupCodeId`, backup chunk keys).
+ * Only HKDF outputs of it leave the core (the chunk keys of version-3 backups). The id for a server built on it
+ * (`backupCodeId`, `<app> backup-code id v1`) was removed in 0.21.0 (audit F-02; no app used it) – `backupIdForServer`.
  */
 export async function backupCodeBase(secret: Uint8Array, app: string): Promise<Uint8Array> {
   return backupCodeStretch(secret, await backupCodeAppSalt(app), DEFAULT_BACKUP_CODE_KDF);
 }
 
-/**
- * Id of a code for a server (e.g. to find the user's backup without an account): 32 bytes,
- * HKDF-SHA256(`backupCodeBase`, `<app> backup-code id v1`). It does not reveal the code or any key
- * (one-way, independent of the backup key, which uses a random salt), but whoever has it can test
- * guesses of the code offline at Argon2id cost – the server keeps it like a password hash and **must
- * limit the number of attempts** of anyone who asks by id (`AUDIT.md`, question 20).
- * For backups of version 3. The fixed salt of the application lets one guess test the code against every id
- * of the application at once and the cost is always the default (audit F-02): new apps use
- * `backupIdForServer` with the parameters of a version-4 backup.
- * Same as `regino_keys::backup_code::backup_code_id`.
- */
-export async function backupCodeId(secret: Uint8Array, app: string): Promise<Uint8Array> {
-  return hkdf32(await backupCodeBase(secret, app), `${app} backup-code id v1`);
-}
 
 /**
  * Salt and Argon2id parameters of a **version-4** backup (since 0.19.0, audit F-02): stored in plain in its
@@ -291,7 +278,7 @@ export async function backupCodeBaseV4(secret: Uint8Array, params: BackupCodePar
 
 /**
  * Id for a server of the backups made with `params` (since 0.19.0, version 4): 32 bytes,
- * HKDF-SHA256(Argon2id(code, params.salt, params.kdf), `<app> backup-code id v2`). Unlike `backupCodeId` it
+ * HKDF-SHA256(Argon2id(code, params.salt, params.kdf), `<app> backup-code id v2`). Unlike the removed `backupCodeId` (0.15.0–0.20.0) it
  * needs the salt of the backups (it is in their header), so it cannot be computed from the code alone, and a
  * guess tested against it costs the Argon2id of the header and hits only this user's id. The server still
  * keeps it like a password hash and limits attempts. Same as `regino_keys::backup_code::backup_id`.

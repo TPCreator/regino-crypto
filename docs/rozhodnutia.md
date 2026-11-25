@@ -2,6 +2,9 @@
 
 Rozhodnutia Tomáša k jadru šifrovania (novšie hore).
 
+- **2026-11-25 – Zrušiť `backupCodeId` (id v3 s pevnou soľou aplikácie) – 0.21.0; aplikácie hneď na nové jadro.** Tomáš
+  2026-11-25 v tejto session na otázky z hlásenia: „1 zrus“ (staré id pre server z verzie v3 – žiadna aplikácia ho
+  nepoužíva; náhrada `backupIdForServer`) a „2 hned a ries ty“ (presun aplikácií na nové jadro hneď, robí Claude).
 - **2026-11-25 – PIN nikde nie je zdroj kľúča: kľúč zariadenia + krátky PIN a passkey PRF v jadre (0.20.0).** Tomáš
   2026-11-25 v hlavnej session Žiačika k hláseniu DysPro: „Toto preco neriesime?“ (Ziacik `docs/rozhodnutia.md`
   2026-11-25) – do jadra prihlásenie cez prístupový kľúč (passkey, WebAuthn PRF) a hotová funkcia „kľúč zariadenia +
