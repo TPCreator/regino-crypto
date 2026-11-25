@@ -161,28 +161,40 @@ export async function withPassword(file: KeyFile, master: Uint8Array, password: 
   }
 }
 
-/** New recovery phrase: returns the file and the new secret (`secretToWords` for the sheet). The old phrase stops working. */
-export async function withNewRecovery(file: KeyFile, master: Uint8Array, strength: RecoveryStrength = file.words): Promise<{ file: KeyFile; secret: Uint8Array }> {
-  const secret = newRecoverySecret(strength);
+/**
+ * Recovery phrase from a given secret (`newRecoverySecret`, e.g. made before the words were checked by the user);
+ * the old phrase stops working. Throws for a secret that is not 16 or 32 bytes.
+ */
+export async function withRecovery(file: KeyFile, master: Uint8Array, secret: Uint8Array): Promise<KeyFile> {
   const kek = await recoveryKey(secret, file.app);
   try {
-    return { file: await withKey({ ...file, words: strength }, master, 'recovery', kek), secret };
+    return await withKey({ ...file, words: strengthOf(secret) }, master, 'recovery', kek);
   } finally {
     kek.fill(0);
   }
 }
 
-/** A new key file: a new master key wrapped by the password and by a new recovery phrase. */
+/** New recovery phrase: returns the file and the new secret (`secretToWords` for the sheet). The old phrase stops working. */
+export async function withNewRecovery(file: KeyFile, master: Uint8Array, strength: RecoveryStrength = file.words): Promise<{ file: KeyFile; secret: Uint8Array }> {
+  const secret = newRecoverySecret(strength);
+  return { file: await withRecovery(file, master, secret), secret };
+}
+
+/**
+ * A new key file: a new master key wrapped by the password and by a recovery phrase – a new one (`words`, default 12)
+ * or the given `secret` (made earlier, e.g. after the user checked the words).
+ */
 export async function createKeyFile(
   app: string,
   password: string | Uint8Array,
-  opts: { kdf?: Readonly<PasswordKdf>; words?: RecoveryStrength } = {},
+  opts: { kdf?: Readonly<PasswordKdf>; words?: RecoveryStrength; secret?: Uint8Array } = {},
 ): Promise<{ file: KeyFile; master: Uint8Array; secret: Uint8Array }> {
   check(app, 'password');
+  const secret = opts.secret ?? newRecoverySecret(opts.words ?? 12);
+  const words = strengthOf(secret);
   const master = crypto.getRandomValues(new Uint8Array(MASTER_KEY_BYTES));
   const kdf = opts.kdf ?? DEFAULT_PASSWORD_KDF;
-  const base: KeyFile = { format: KEYFILE_FORMAT, v: KEYFILE_VERSION, app, kdf: { ...kdf, salt: '' }, words: opts.words ?? 12, wraps: {} };
-  const withPw = await withPassword(base, master, password, kdf);
-  const { file, secret } = await withNewRecovery(withPw, master, base.words);
+  const base: KeyFile = { format: KEYFILE_FORMAT, v: KEYFILE_VERSION, app, kdf: { ...kdf, salt: '' }, words, wraps: {} };
+  const file = await withRecovery(await withPassword(base, master, password, kdf), master, secret);
   return { file, master, secret };
 }

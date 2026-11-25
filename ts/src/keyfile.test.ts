@@ -14,6 +14,7 @@ import {
   withNewRecovery,
   withoutKey,
   withPassword,
+  withRecovery,
   wrapMaster,
 } from './keyfile';
 import { recoveryKey } from './recovery';
@@ -113,6 +114,20 @@ describe('keyfile – file', () => {
     expect(() => withoutKey(s, 'password')).toThrow(/cannot be removed/);
     expect(() => withoutKey(s, 'recovery')).toThrow(/cannot be removed/);
     await expect(createKeyFile('A', 'x', { kdf: KDF })).rejects.toThrow(/application/);
+  }, 60000);
+
+  it('given recovery secret (checked by the user before the file is made)', async () => {
+    const secret = crypto.getRandomValues(new Uint8Array(32));
+    const { file, master, secret: s } = await createKeyFile('testapp', 'x', { kdf: KDF, secret });
+    expect(s).toBe(secret);
+    expect(file.words).toBe(24);
+    expect(await unlockWithRecovery(file, secret)).toEqual(master);
+    const other = crypto.getRandomValues(new Uint8Array(16));
+    const f2 = await withRecovery(file, master, other);
+    expect(f2.words).toBe(12);
+    expect(await unlockWithRecovery(f2, other)).toEqual(master);
+    expect(await unlockWithRecovery(f2, secret)).toBeNull();
+    await expect(withRecovery(file, master, new Uint8Array(20))).rejects.toThrow();
   }, 60000);
 
   it('default parameters and 24 words', async () => {
