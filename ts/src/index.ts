@@ -32,3 +32,4 @@ export * from './sync';
 export * from './inbox';
 export * from './signing';
 export * from './groupKey';
+export * from './context';

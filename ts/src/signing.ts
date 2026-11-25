@@ -35,6 +35,15 @@ export const MAX_WRAPPED = 65536;
 export const MAX_VERSION = Number.MAX_SAFE_INTEGER;
 /** Version of `SignedWrappedKey`. */
 export const SIGNED_WRAP_VERSION = 1;
+/**
+ * Longest member list blob (message ‖ signature) a canonical list can have – every field at its limit and
+ * `MAX_MEMBERS` members: 1 602 216 bytes, the same as Rust `sign::MAX_MANIFEST_LEN`. Since 0.17.0 (audit
+ * validation 2026-11-25, L-06) a longer blob is refused before anything is decoded; no accepted list is longer.
+ */
+export const MAX_MANIFEST_LEN =
+  8 + (4 + 8) + (4 + MAX_CONTEXT) + 2 * (4 + 8) + 2 * (4 + 32) + (4 + 4) +
+  MAX_MEMBERS * (2 * (4 + MAX_NAME) + (4 + 1) + (4 + SIGNING_KEY_LEN) + (4 + 8) + (4 + MAX_KEY)) +
+  SIGNATURE_LEN;
 
 const enc = new TextEncoder();
 const MAGIC = enc.encode("RGN-SIG1");
@@ -543,7 +552,10 @@ class Reader {
 export async function openManifest(blob: Uint8Array): Promise<AcceptedManifest> {
   let manifest: Manifest;
   let signer: Uint8Array;
-  const msg = blob instanceof Uint8Array && blob.length >= MAGIC.length + SIGNATURE_LEN ? blob.subarray(0, blob.length - SIGNATURE_LEN) : null;
+  const msg =
+    blob instanceof Uint8Array && blob.length >= MAGIC.length + SIGNATURE_LEN && blob.length <= MAX_MANIFEST_LEN
+      ? blob.subarray(0, blob.length - SIGNATURE_LEN)
+      : null;
   try {
     if (!msg || !equalBytes(msg.subarray(0, MAGIC.length), MAGIC)) throw new Error();
     const r = new Reader(msg.subarray(MAGIC.length));

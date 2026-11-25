@@ -10,6 +10,7 @@ import {
   verifySignature,
   verifyToken,
   verifyWithKeys,
+  verifyWithKeysAt,
   type Payload,
 } from './signed';
 
@@ -132,6 +133,26 @@ describe('signed tokens', () => {
     expect(await verifyWithKeys(await dev({ nbf: 'x' }), keys, expect_, AT)).toBeNull();
     // `typ` and `v` are the caller's: a token of any typ (other than cert) and any v comes back
     expect((await verifyWithKeys(await dev({ v: 7, typ: 'other' }), keys, expect_, AT))?.v).toBe(7);
+  });
+
+  // 0.17.0 (audit validation 2026-11-25, L-05): the time is a required argument of verifyWithKeysAt
+  it('verifyWithKeysAt: time required, null only on purpose', async () => {
+    const { product, roots, cert } = await setup();
+    const keys = await certifiedKeys([{ kid: 'demo-2026', cert }], roots, AT);
+    const expect_ = { prefix: 'DM', product: 'demo', use: 'licence' };
+    const dev = (p: Payload) => sign('DM', { v: 1, typ: 'dev', kid: 'demo-2026', product: 'demo', ...p }, product.secret);
+    const expired = await dev({ exp: AT - 1 });
+    expect(await verifyWithKeysAt(expired, keys, expect_, AT)).toBeNull();
+    expect(await verifyWithKeysAt(await dev({ nbf: AT + 1 }), keys, expect_, AT)).toBeNull();
+    expect(await verifyWithKeysAt(await dev({ nbf: AT, exp: AT }), keys, expect_, AT)).not.toBeNull();
+    // null: the caller checks time itself (licence tokens), as verifyWithKeys without `at`
+    expect(await verifyWithKeysAt(expired, keys, expect_, null)).not.toBeNull();
+    expect(await verifyWithKeys(expired, keys, expect_, null)).not.toBeNull();
+    for (const bad of [AT + 0.5, NaN, -1, Infinity, '1' as unknown as number, undefined as unknown as number]) {
+      await expect(verifyWithKeysAt(expired, keys, expect_, bad), String(bad)).rejects.toThrow('whole seconds');
+    }
+    // a wrong signature is still null, whatever the time
+    expect(await verifyWithKeysAt(expired.slice(0, -2) + 'AA', keys, expect_, AT)).toBeNull();
   });
 
   it('certificate chain: root → product key → token', async () => {

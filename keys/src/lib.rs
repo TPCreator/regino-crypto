@@ -21,6 +21,7 @@ use zeroize::{Zeroize, Zeroizing};
 pub mod backup_chunks;
 pub mod backup_code;
 pub mod chunks;
+pub mod context;
 pub mod device;
 pub mod group;
 pub mod kdf;

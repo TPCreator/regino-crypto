@@ -4,9 +4,12 @@
 //! - Values pass through as JSON (numbers, text, null) so they can be sent over the Tauri bridge.
 //! - Knows nothing about the app's tables – the app handles schema and migrations (e.g. with its own TypeScript layer).
 
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{limits::Limit, types::ValueRef, Connection, OpenFlags};
 use serde_json::{Map, Number, Value};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 pub mod backup_chunks;
@@ -86,6 +89,43 @@ pub enum Error {
 
 pub struct Vault {
     conn: Connection,
+    /// Set only while [`Vault::rekey`] runs its own `PRAGMA rekey` (see [`guard`]).
+    rekeying: Arc<AtomicBool>,
+}
+
+/// Pragmas that SQL through `exec`, `run` and `all` may not use (since 0.17.0, audit validation
+/// 2026-11-25): those SQL strings come from the app's window, and `PRAGMA rekey`/`hexrekey` would
+/// re-encrypt the file under a key of the caller's choice (e.g. a known one) behind the keystore's back
+/// – the file no longer opens with the stored key, or opens for anyone who knows the chosen one;
+/// `PRAGMA key` and the `cipher_*` settings change how the file is encrypted. The key is set only by
+/// [`Vault::open`] (before this guard exists) and changed only by [`Vault::rekey`].
+fn forbidden_pragma(name: &str, value: Option<&str>) -> bool {
+    let name = name.to_ascii_lowercase();
+    match name.as_str() {
+        // the key itself, and SQLCipher's older names of key and cipher settings
+        "key" | "rekey" | "hexkey" | "hexrekey" | "textkey" | "textrekey" | "cipher" | "kdf_iter" | "fast_kdf_iter" => true,
+        // read-only information about the library stays allowed (e.g. for an "About" screen)
+        "cipher_version" | "cipher_provider" | "cipher_provider_version" | "cipher_fips_status" => value.is_some(),
+        // secure_delete (0.11.1) is set by `open` and may be read, never turned off
+        "secure_delete" => value.is_some(),
+        _ => name.starts_with("cipher_") || name.starts_with("sqlcipher_") || name.starts_with("rekey_"),
+    }
+}
+
+/// The authorizer of every vault connection: refuses [`forbidden_pragma`] unless [`Vault::rekey`] is
+/// running. SQLite asks it when a statement is prepared, so a refused pragma never runs (`Error::Sql`,
+/// "not authorized").
+fn guard(rekeying: Arc<AtomicBool>) -> impl for<'r> FnMut(AuthContext<'r>) -> Authorization + Send + 'static {
+    move |ctx: AuthContext<'_>| match ctx.action {
+        AuthAction::Pragma { pragma_name, pragma_value } if forbidden_pragma(pragma_name, pragma_value) => {
+            if rekeying.load(Ordering::SeqCst) && pragma_name.eq_ignore_ascii_case("rekey") {
+                Authorization::Allow
+            } else {
+                Authorization::Deny
+            }
+        }
+        _ => Authorization::Allow,
+    }
 }
 
 impl Vault {
@@ -94,7 +134,7 @@ impl Vault {
     /// key. A file that cannot be read at all (locked by another process, I/O error, damaged) is
     /// `Error::Sql` – it says nothing about the key.
     pub fn open(path: &Path, key: &Key) -> Result<Vault, Error> {
-        let conn = Connection::open_with_flags(
+        let mut conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
@@ -137,7 +177,10 @@ impl Vault {
         // many attached databases" – `VACUUM INTO` attaches its target the same way). `compact` lifts
         // the limit only for its own fixed `VACUUM` (which attaches a temporary database internally).
         conn.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)?;
-        Ok(Vault { conn })
+        // No key or cipher changes through the app's SQL (since 0.17.0, `forbidden_pragma`).
+        let rekeying = Arc::new(AtomicBool::new(false));
+        conn.authorizer(Some(guard(rekeying.clone())))?;
+        Ok(Vault { conn, rekeying })
     }
 
     /// Removes what deleted rows leave behind in the files. `secure_delete` zeroes deleted content
@@ -190,6 +233,8 @@ impl Vault {
         Ok(())
     }
 
+    /// Runs one or more statements. Like [`Vault::run`] and [`Vault::all`] it refuses `ATTACH` /
+    /// `VACUUM INTO` (0.16.1) and `PRAGMA key`/`rekey`/`cipher_*` and turning `secure_delete` off (0.17.0).
     pub fn exec(&self, sql: &str) -> Result<(), Error> {
         self.conn.execute_batch(sql)?;
         Ok(())
@@ -222,7 +267,11 @@ impl Vault {
     /// Changes the key (e.g. after enabling a PIN or during recovery); the whole file is re-encrypted.
     pub fn rekey(&self, key: &Key) -> Result<(), Error> {
         let pragma = key_pragma("rekey", key);
-        self.conn.execute_batch(&pragma)?;
+        // the only place a `PRAGMA rekey` is authorized (`guard`); the flag is cleared before returning
+        self.rekeying.store(true, Ordering::SeqCst);
+        let done = self.conn.execute_batch(&pragma);
+        self.rekeying.store(false, Ordering::SeqCst);
+        done?;
         Ok(())
     }
 }
